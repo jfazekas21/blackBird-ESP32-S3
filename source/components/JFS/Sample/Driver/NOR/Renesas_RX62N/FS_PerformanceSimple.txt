@@ -1,0 +1,19 @@
+FS_ConfigNOR_BM_ST_M25_RX62N_Renesas_RSKRX62N.c
+===============================================
+FILE_SIZE:            (8192L * 1024L)
+BLOCK_SIZE:           (8 * 1024L)
+NUM_BLOCKS_MEASURE:   (64)
+IDE:                  IAR RX V3.10A
+Optimization:         High (Speed)
+Serial NOR flash:     Microchip SST25VF016B
+SPI frequency:        24 Mhz
+SPI mode:             single
+
+Start
+High-level format
+Writing 3 chunks of 512 KiB......OK
+Reading 3 chunks of 512 KiB......OK
+
+W Speed: 46 KiB/s
+R Speed: 1828 KiB/s
+Finished

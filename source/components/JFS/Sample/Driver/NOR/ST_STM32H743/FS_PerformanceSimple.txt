@@ -1,0 +1,88 @@
+FS_ConfigNOR_BM_SPIFI_STM32H743_ST_STM32H743I_EVAL.c
+====================================================
+NOR flash: Micron MT25TL01GHBB8ESF
+SPI speed: 25 MHz
+SPI mode:  quad
+
+Start
+High-level format
+Writing 16 chunks of 524288 bytes...................OK
+Reading 16 chunks of 524288 bytes...................OK
+
+W Speed: 313.92 Kbyte/s
+R Speed: 11636.36 Kbyte/s
+Finished
+
+FS_ConfigNOR_BM_SPIFI_STM32H743_SEGGER_QSPI_Flash_Evaluator.c
+=============================================================
+NOR flash: Micron MT25QL128ABA
+SPI speed: 48 MHz
+SPI mode:  quad
+
+Start
+High-level format
+Writing 4 chunks of 2048 Kbytes.......OK
+Reading 4 chunks of 2048 Kbytes.......OK
+
+W Speed: 351 Kbyte/s
+R Speed: 22755 Kbyte/s
+Finished
+
+--
+
+NOR flash: Macronix MX66L2G45G
+SPI speed: 48 MHz
+SPI mode:  quad
+
+Start
+High-level format
+Writing 16 chunks of 512 Kbytes...................OK
+Reading 16 chunks of 512 Kbytes...................OK
+
+W Speed: 176 Kbyte/s
+R Speed: 23272 Kbyte/s
+Finished
+
+--
+
+NOR flash: Winbond W25Q512JV
+SPI speed: 48 MHz
+SPI mode:  quad DTR
+
+Start
+High-level format
+Writing 16 chunks of 512 KiB...................OK
+Reading 16 chunks of 512 KiB...................OK
+
+W Speed: 135 KiB/s
+R Speed: 42666 KiB/s
+Finished
+
+--
+
+NOR flash: Winbond W25Q512JV
+SPI speed: 48 MHz
+SPI mode:  quad
+
+Start
+Low-level format
+High-level format
+Writing 16 chunks of 512 KiB...................OK
+Reading 16 chunks of 512 KiB...................OK
+
+W Speed: 135 KiB/s
+R Speed: 23272 KiB/s
+Finished
+
+FS_ConfigNOR_BM_CFI_1x16_STM32H743_ST_STM32H743I_EVAL.c
+=======================================================
+NOR flash: Micron  PC28F128M29EWLA
+
+Start
+High-level format
+Writing 4 chunks of 2048 Kbytes.......OK
+Reading 4 chunks of 2048 Kbytes.......OK
+
+W Speed: 183 Kbyte/s
+R Speed: 18788 Kbyte/s
+Finished

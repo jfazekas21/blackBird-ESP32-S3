@@ -1,0 +1,25 @@
+NOR flash: Macronix MX25R3235F
+SPI freq:  12 MHz
+IDE:       Embedded Studio V4.42 (Code > Code Generation > Optimization Level: Level 2 for speed)
+
+FS_ConfigNOR_SPIFI_EFM32GG11_SiliconLabs_SLSTK3701A.c
+-----------------------------------------------------
+Start
+High-level format
+Writing 6 chunks of 512 Kbytes.........OK
+Reading 6 chunks of 512 Kbytes.........OK
+
+W Speed: 32 Kbyte/s
+R Speed: 1570 Kbyte/s
+Finished
+
+FS_ConfigNOR_BM_SPIFI_EFM32GG11_SiliconLabs_SLSTK3701A.c
+--------------------------------------------------------
+Start
+High-level format
+Writing 7 chunks of 512 Kbytes..........OK
+Reading 7 chunks of 512 Kbytes..........OK
+
+W Speed: 34 Kbyte/s
+R Speed: 1551 Kbyte/s
+Finished

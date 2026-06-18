@@ -1,0 +1,21 @@
+FS_ConfigNOR_BM_SPIFI_STM32L4R9_ST_STM32L4R9I_DISCO.c
+-----------------------------------------------------
+FILE_SIZE:            (4096L * 1024L)
+BLOCK_SIZE:           (32L   * 1024L)
+NUM_BLOCKS_MEASURE:   64
+NOR flash:            MX25LM51245G
+SPI frequency:        30 MHz
+SPI mode:             single
+IDE:                  SEGGER Embedded Studio V5.42
+Compiler:             SEGGER
+Optimization level:   Level 2 for speed
+
+Start
+Low-level format
+High-level format
+Writing 4 chunks of 2048 Kbytes.......OK
+Reading 4 chunks of 2048 Kbytes.......OK
+
+W Speed: 186 Kbyte/s
+R Speed: 3112 Kbyte/s
+Finished

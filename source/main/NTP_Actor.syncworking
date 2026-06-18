@@ -1,0 +1,2680 @@
+#include "actor.h"
+#include "Config.h"
+#include "Console_Actor.h"
+#include "NTP_Actor.h"
+#include "esp_sntp.h"
+#include "rtc_wdt.h"
+#include "esp_timer.h"
+#include "driver/gptimer.h"
+#include "esp_private/esp_clk.h"
+#include "pcf8563.h"
+#include <stdlib.h>
+#include <math.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <sys/socket.h>
+#include <netdb.h>
+#include <sys/time.h>
+//-----------------------------------------------------------------------------------------------//
+
+#define NTP_sync_pin 21
+#define CONFIG_SNTP_TIME_SYNC_METHOD_SMOOTH 0
+#define RTC_THRESHOLD 1735689600
+
+static char Set_External_RTC = 0;
+static const char * THIS_ACTOR 	 	= "NTP";
+static const char 			THIS_ACTOR_ID 	= 	NTP;
+static int NET_status = -1;
+BaseType_t NTPMonitor, NTP_Connect_Method;
+TaskHandle_t NTP_Handle = NULL, ConnectHandle = NULL, NTP_Sync_Check_Handle = NULL;	//, SlideSwitch_Handle;
+static StaticTask_t xNTPTaskBuffer, xNTP_CONN_TaskBuffer,xNTP_Sync_Check_TaskBuffer;	//, xNTP_SlideSwitch_TaskBuffer;  //// Declare a static task control block
+static StaticQueue_t Monitor_pxQueueBuffer;
+static AMessage_st s_Message_Tx;//s_Message_Rx			 // ACtors Message structure
+static int NTPstatus = SNTP_SYNC_STATUS_RESET;
+unsigned char pin_val=0;
+static bool     		FirstEntry_bool = 	false;
+char NTP_operation = 0;
+// Drift threshold & poll intervals (unchanged)
+//static const int64_t  DRIFT_THRESHOLD_US     = 15 * 1000;      // 15 ms
+//static const uint32_t FAST_POLL_INTERVAL_MS  = 15 * 1000;      // 15 s
+//static const uint32_t SLOW_POLL_INTERVAL_MS  = 60 * 60 * 1000; // 1 h
+// State for dynamic polling
+static bool     offset_captured     = false;
+static int64_t  base_offset_us      = 0;
+static bool     using_slow_interval = false;
+
+//static const int   BURST_COUNT_MAX       = 5;
+static int   burst_count     = 0;
+static bool  in_fast_burst   = true;
+static bool  rtc_written     = false;
+
+volatile int64_t ntp_time_us = 0; // Store time in microseconds
+volatile uint64_t ntp_timer_offset = 0; // Timer counter at last NTP sync
+static struct ntp_registers {
+	char URL[32];
+	char time_zone[40];
+	uint32_t sync_interval;
+	uint8_t RTC_Status;
+	uint8_t NTP_Mode;
+} ntp_Para;
+
+//typedef struct
+//{
+//   char *url;
+//   int time_interval;
+//   char time_zone;
+//   uint8_t sync_interval;
+//
+//}ntp_user_config;
+//
+//ntp_user_config config_ntp;
+
+PSRAM_ATTR static struct property prop[] = // Actor Property
+{
+    { &ntp_Para.URL,           "URL",           STRING,   "RW", "URL for NTP server" },
+    { &ntp_Para.time_zone,     "TIME_ZONE",     STRING,   "RW", "Time zone for synchronization" },
+    { &ntp_Para.sync_interval, "SYNC_INTERVAL", INT,      "R", "Sync interval in mesc for NTP synchronization" },
+    { &ntp_Para.RTC_Status,    "RTC_STATUS",    U_INT8,   "R",  "RTC Status" },
+	{ &ntp_Para.NTP_Mode,      "NTP_MODE",      U_INT8,   "R",  "NTP Mode" }
+};
+
+PSRAM_ATTR_BSS static char payLoadData[MAX_JSON_PAYLOAD_BYTES];
+PSRAM_ATTR_BSS static char payLoadData_NTP[1024];
+PSRAM_ATTR_BSS static uint8_t Monitor_pucQueueStorage [NTP_RX_QUEUE_LENGTH * sizeof(AMessage_st)];
+PSRAM_ATTR_BSS static StackType_t NTP_TaskStack [NTP_CONNECT_TASK_STACK_DEPTH], xTaskStack [NTP_TASK_STACK_DEPTH];	//, SlideSwitch_TaskStack[NTP_TASK_STACK_DEPTH_SlideSwitch];
+PSRAM_ATTR_BSS static StackType_t NTP_Sync_Check_TaskStack [NTP_SYNC_CHECK_TASK_STACK_DEPTH];
+PSRAM_ATTR_BSS static char Rx_buffer[8192];
+PSRAM_ATTR_BSS static char Callback_buffer[2048];
+QueueHandle_t NTP_Rx_Queue; // NTP_Tx_Queue;
+
+static void init		(void *a, void *b); 							// Init actor
+static uint8_t set(char *property, char *value, AMessage_st* s_Message_Rx);					//	Change a parameter
+static void get(char *prop, char *val);							//	Read a Parameter
+static void help(AMessage_st* s_Message_Rx);
+static void monitor(void *pvParameters __attribute__((unused)));
+static void Get_Property(AMessage_st* s_Message_Rx);
+static void initialize_sntp(void);
+static void periodic_timer_callback(void* arg);
+static void periodic_synch_pulse(void* arg);
+static void NTP_sync_time(void);
+static void Analyse_Response(AMessage_st* s_Message_Rx);
+static void get_actor_properties(AMessage_st* s_Message_Rx);                  // Get actor properties
+static void NTP_Connect(void *pvParameters __attribute__((unused)));
+static void Add_Response_msg(char* buffer, AMessage_st* s_Message_Rx);
+static void Send_CMD_To_Other_Actor(char dest_id, const char *DestActor, char *response, int16_t size, char *function);
+static void set_initial_time(AMessage_st* s_Message_Rx) ;
+static void set_RTC_time(AMessage_st* s_Message_Rx);
+static void Set_NTP_Sync_Interval(AMessage_st* s_Message_Rx);
+static void NTP_Sync_Check(void *pvParameters __attribute__((unused)));
+
+static uint8_t NTP_Synched_flag = 0;
+#define ONE_SECOND_TIMER_FLAG 1
+#define TEN_SECOND_TIMER_FLAG 10
+#define GENERATE_TEN_SECOND_PULSE 20
+static uint8_t set_second_timer_flag = 0;
+static uint8_t apply_synch_filter = 0;
+
+const esp_timer_create_args_t periodic_synch_pulse_args = {
+		.callback = &periodic_synch_pulse,
+		/* name is optional, but may help identify the timer when debugging */
+		.name = "periodicsynchpulse"
+};
+static esp_timer_handle_t periodic_synch_timer;
+
+const esp_timer_create_args_t periodic_timer_args = {
+		.callback = &periodic_timer_callback,
+		/* name is optional, but may help identify the timer when debugging */
+		.name = "periodic"
+};
+static esp_timer_handle_t periodic_timer;
+
+static void Get_Property(AMessage_st* s_Message_Rx)
+{
+	cJSON *in_JSON   = NULL;
+	cJSON *out_JSON  = NULL;
+	cJSON *head_JSON = NULL;
+	char str[100] = {0};
+	char val_p8[256] = {0};
+	int Array_size = 0;
+
+	in_JSON 	= cJSON_Parse((char*) s_Message_Rx->payload_p8);
+	if (in_JSON == NULL) {
+		sprintf(str,"console get property Invalid Json input at %d in %s",__LINE__,__FUNCTION__);
+		Add_Response_msg(str,s_Message_Rx);
+		return;
+	}
+	out_JSON 	= cJSON_CreateObject();
+	head_JSON = cJSON_GetObjectItem(in_JSON, "Property_Names");
+	Array_size = cJSON_GetArraySize(head_JSON);
+	if(Array_size > 0)
+	{
+		for(int i=0; i<Array_size; i++)
+		{
+			cJSON *element = cJSON_GetArrayItem(head_JSON, i);
+			if (cJSON_IsString(element) && (element->valuestring != NULL))
+			{
+				if(strlen(element->valuestring) == 0)
+					continue;
+				memset(val_p8, 0, sizeof (val_p8));
+				get(element->valuestring, val_p8);
+				cJSON_AddStringToObject(out_JSON, element->valuestring, (char*) val_p8);
+			}
+		}
+		memset(payLoadData,0,sizeof(payLoadData));
+		cJSON_PrintPreallocated(out_JSON, payLoadData, sizeof(payLoadData), false);
+		strcpy((char*)s_Message_Rx->payload_p8, payLoadData);
+		console_send_responce_to_console_xface(s_Message_Rx);
+	}
+	else
+	{
+		Add_Response_msg("'Property_Names' array is NULL.",s_Message_Rx);
+	}
+	cJSON_Delete(out_JSON);
+	cJSON_Delete(in_JSON);
+}
+
+static void init(void *a, void *b) {
+	if (FirstEntry_bool) {
+			return;
+	}
+	FirstEntry_bool = true;
+	s_Message_Tx.Src_ID_u8	= THIS_ACTOR_ID;
+	NTP_Rx_Queue = xQueueCreateStatic(NTP_RX_QUEUE_LENGTH, sizeof(AMessage_st), Monitor_pucQueueStorage, &Monitor_pxQueueBuffer);
+	if(NTP_Rx_Queue == NULL)
+	{
+#ifdef ENABLE_PRINT_MSG
+		printf("<NTP.ERROR(SD RX Queue is not created.)<CR>");
+#endif
+	}
+
+	NTP_Handle = xTaskCreateStaticPinnedToCore(
+					monitor,                 // Task function
+					"NTP Monitor",            // Task name
+					NTP_TASK_STACK_DEPTH,        // Stack size in words
+					NULL,                    // Task parameters (not used here)
+					NTP_TASK_PRIORITY,                       // Task priority
+					xTaskStack,              // Pointer to task stack (allocated in PSRAM)
+					&xNTPTaskBuffer,             // Pointer to task control block
+					1
+   );
+
+	if (NTP_Handle == NULL) {
+#ifdef ENABLE_PRINT_MSG
+			printf("Failed to create task\n");
+#endif
+		}
+
+
+
+	ntp_Para.NTP_Mode = SNTP_SYNC_MODE_IMMED;
+
+//	if(Hardware_RevH_flag == true)    // NTP sync interval = 1 Hr for Hx device
+//	{
+//		ntp_Para.sync_interval = 60 * 60 * 1000;
+//	}
+//	else
+//	{
+//		ntp_Para.sync_interval = 60000;  // NTP sync interval = 1 min for old device
+//	}
+
+	ntp_Para.sync_interval = 1 * 60 * 1000; //60000; // FAST_POLL_INTERVAL_MS; //60000;  // NTP sync interval = 1 min
+
+	//printf("\n\n ntp_Para.sync_interval = %ld \n\n", ntp_Para.sync_interval);
+
+	struct tm time = {0};
+	uint8_t timems = 0;
+	time_t tOfDay = 0;
+	i2c_dev_t *dev = pcf8563_get_device_handle();
+	if (pcf8563_get_time_ms(dev, &time, &timems) == ESP_OK) {
+
+		//printf("\n RTC time.tm_mday = %d,  time.tm_mon  = %d, time.tm_year  = %d, time.tm_hour  = %d, time.tm_min  = %d, time.tm_sec  = %d \n", time.tm_mday, time.tm_mon, time.tm_year, time.tm_hour, time.tm_min, time.tm_sec);
+
+		time.tm_year-=1900;
+		tOfDay = mktime(&time);
+//		printf("\n\n tOfDay = %lld \n\n", tOfDay);
+//		printf("\n 1 RTC time.tm_mday = %d,  time.tm_mon  = %d, time.tm_year  = %d, time.tm_hour  = %d, time.tm_min  = %d, time.tm_sec  = %d \n", time.tm_mday, time.tm_mon, time.tm_year, time.tm_hour, time.tm_min, time.tm_sec);
+
+	}
+	if(tOfDay > RTC_THRESHOLD)
+	{
+		ntp_Para.RTC_Status = RTC_SET_POWER_ON;
+//		//Enable events
+//		cJSON *my_JSON1 = cJSON_CreateObject();
+//		cJSON_AddNumberToObject(my_JSON1, "EVT_TASK_DIS_FLAG", 1);
+//		memset(payLoadData,0,sizeof(payLoadData));
+//		cJSON_PrintPreallocated(my_JSON1, payLoadData, sizeof(payLoadData), false);
+//		Send_CMD_To_Other_Actor(EVENT_ACTOR,"EVENT_ACTOR", payLoadData, strlen(payLoadData), "SETEVTTASKFG");
+//		cJSON_Delete(my_JSON1); // Free the cJSON object
+	}
+	else
+	{
+		ntp_Para.RTC_Status = RTC_NEVER_SET;
+	}
+//
+//	pcf8563_get_time_ms(dev, &time, &timems);
+//	time.tm_year-=1900;
+//	tOfDay = mktime(&time);
+//	printf("\n\n tOfDay = %lld \n\n", tOfDay);
+//	ntp_Para.RTC_Status = RTC_SMOOTH_MODE;
+
+	ESP_ERROR_CHECK(esp_timer_create(&periodic_synch_pulse_args, &periodic_synch_timer));  // create periodic timer
+	ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));  // create periodic timer
+	esp_timer_early_init();
+
+//	cJSON *responseObject = cJSON_CreateObject();
+//	cJSON_AddStringToObject(responseObject, "FILE_NAME","A:/System/NTP.json");
+//	memset(payLoadData,0,sizeof(payLoadData));
+//	cJSON_PrintPreallocated(responseObject, payLoadData, sizeof(payLoadData), false);
+//	cJSON_Delete(responseObject);
+//	Send_CMD_To_Other_Actor(FILE_SYSTEM,"FILE_SYSTEM", payLoadData, strlen(payLoadData), "READ");
+}
+
+static uint8_t set(char *property, char *value, AMessage_st* s_Message_Rx) {
+	uint8_t parameter_found = 0; // Flag to check if actor is found
+	int no_of_elements = sizeof(prop) / sizeof(struct property);
+	for (int i = 0; i < no_of_elements; i++) {
+		if (!strcmp(property, prop[i].str_name)) {
+
+			if (!strcmp(prop[i].access, "RW")) {
+
+			parameter_found = 1; // Set flag to indicate actor is found
+			switch (prop[i].type) {
+
+			case U_INT8:
+				*(uint8_t*) prop[i].name = atoi(value);
+				break;
+
+			case U_INT16:
+				*(uint16_t*) prop[i].name = atoi(value);
+				break;
+
+			case U_INT32:
+				*(uint32_t*) prop[i].name = atoi(value);
+				break;
+
+			case INT:
+				*(int*) prop[i].name = atoi(value);
+				break;
+			case FLOAT:
+				*(float*) prop[i].name = atof(value);
+				break;
+
+			case STRING:
+				strcpy((char*) prop[i].name, value);
+				break;
+
+			default:
+				break;
+			}
+		}
+		else
+		{
+			return 2;
+		}
+	}
+	}
+	if(parameter_found)
+		return 1;
+	else
+		return 0;
+}//	set
+
+static void get(char *str_prop, char *val_a8) {
+	//no of elements
+	int no_of_elements = sizeof(prop) / sizeof(struct property);
+	for (int i = 0; i < no_of_elements; i++) {
+		if (!strcmp(str_prop, prop[i].str_name)) {
+			switch (prop[i].type) {
+
+			case U_INT8:
+				sprintf(val_a8, "%d", *(uint8_t*) prop[i].name);
+				break;
+
+			case U_INT16:
+				sprintf(val_a8, "%d", *(uint16_t*) prop[i].name);
+				break;
+
+			case U_INT32:
+				sprintf(val_a8, "%ld", *(uint32_t*) prop[i].name);
+				break;
+
+			case INT:
+				sprintf(val_a8, "%d", *(int*) prop[i].name);
+				break;
+
+			case FLOAT:
+				sprintf(val_a8, "%f", *(float*) prop[i].name);
+				break;
+
+			case STRING:
+				strcpy(val_a8, prop[i].name);
+				break;
+			default:
+				break;
+			}
+		}
+	}
+}//	get
+
+static void get_actor_properties(AMessage_st* s_Message_Rx){
+
+	char val_a8[40] = {0};
+	char typeString[20] = {0};
+	int no_of_elements = sizeof(prop) / sizeof(struct property);
+
+	    // Create JSON arrays
+	    cJSON *jsonArrayName = cJSON_CreateArray();
+	    cJSON *jsonArrayType = cJSON_CreateArray();
+	    cJSON *jsonArrayValue = cJSON_CreateArray();
+	    cJSON *jsonArrayAccess = cJSON_CreateArray();
+	    cJSON *jsonArrayHelpString = cJSON_CreateArray();
+
+	    for (int i = 0; i < no_of_elements; i++) {
+			cJSON_AddItemToArray(jsonArrayName, cJSON_CreateString(prop[i].str_name));
+			// Convert DataType enum to string representation for property type
+			// Add value based on data type for property name
+			switch (prop[i].type) {
+				case U_INT8:
+					strcpy(typeString, "U_INT8");
+					sprintf(val_a8, "%d", *(uint8_t*) prop[i].name);
+					break;
+
+				case U_INT16:
+					strcpy(typeString, "U_INT16");
+					sprintf(val_a8, "%d", *(uint16_t*) prop[i].name);
+					break;
+
+				case U_INT32:
+					strcpy(typeString, "U_INT32");
+					sprintf(val_a8, "%ld", *(uint32_t*) prop[i].name);
+					break;
+
+				case INT:
+					strcpy(typeString, "INT");
+					sprintf(val_a8, "%d", *(int*) prop[i].name);
+					break;
+
+				case FLOAT:
+					strcpy(typeString, "FLOAT");
+					sprintf(val_a8, "%f", *(float*) prop[i].name);
+					break;
+
+				case STRING:
+					strcpy(typeString, "STRING");
+					strcpy(val_a8, prop[i].name);
+					break;
+
+				default:
+					break;
+				}
+			if(!(strcmp(prop[i].str_name, "RTC_STATUS")))
+			{
+				switch (*(char*)prop[i].name)
+				{
+				case RTC_NEVER_SET:
+					strcpy(val_a8, "RTC_NEVER_SET");
+					break;
+
+				case RTC_DEVICE_ANNOUNCE:
+					strcpy(val_a8, "RTC_DEVICE_ANNOUNCE");
+					break;
+
+				case RTC_IMMEDIATE_MODE:
+					strcpy(val_a8, "RTC_IMMEDIATE_MODE");
+					break;
+
+				case RTC_SMOOTH_MODE:
+					strcpy(val_a8, "RTC_SMOOTH_MODE");
+					break;
+
+				case RTC_SET_POWER_ON:
+					strcpy(val_a8, "RTC_SET_POWER_ON");
+					break;
+
+				default:
+					break;
+				}
+			}
+			if(!(strcmp(prop[i].str_name, "NTP_MODE")))
+			{
+				switch (*(char*)prop[i].name)
+				{
+					case SNTP_SYNC_MODE_IMMED:
+						strcpy(val_a8, "SNTP_SYNC_MODE_IMMED");
+						break;
+
+					case SNTP_SYNC_MODE_SMOOTH:
+						strcpy(val_a8, "SNTP_SYNC_MODE_SMOOTH");
+						break;
+
+					default:
+						break;
+				}
+			}
+			cJSON_AddItemToArray(jsonArrayType, cJSON_CreateString(typeString));
+			cJSON_AddItemToArray(jsonArrayValue, cJSON_CreateString(val_a8));
+			cJSON_AddItemToArray(jsonArrayAccess, cJSON_CreateString(prop[i].access));
+			cJSON_AddItemToArray(jsonArrayHelpString, cJSON_CreateString(prop[i].HelpString));
+		}
+		// Create a JSON object and add the array to it
+		cJSON *jsonObject = cJSON_CreateObject();
+		cJSON_AddItemToObject(jsonObject, "Name", jsonArrayName);
+		cJSON_AddItemToObject(jsonObject, "Type", jsonArrayType);
+		cJSON_AddItemToObject(jsonObject, "Value", jsonArrayValue);
+		cJSON_AddItemToObject(jsonObject, "Access", jsonArrayAccess);
+		cJSON_AddItemToObject(jsonObject, "Help String", jsonArrayHelpString);
+		memset(payLoadData,0,sizeof(payLoadData));
+		cJSON_PrintPreallocated(jsonObject, payLoadData, sizeof(payLoadData), false);
+		strcpy((char*)s_Message_Rx->payload_p8, payLoadData);		
+
+		cJSON_Delete(jsonObject);
+		console_send_responce_to_console_xface(s_Message_Rx);
+
+}	//	get_actor_properties
+
+static void help(AMessage_st* s_Message_Rx) {
+	cJSON *responseObject = cJSON_CreateObject();  	// Create a RESPONSE object and add it to the RESPONSE array
+	cJSON_AddStringToObject(responseObject, "INIT()", "Initialize the NTP actor.");
+	cJSON_AddStringToObject(responseObject, "SET(string URL)", "Set the parameters of the property table.");
+	cJSON_AddStringToObject(responseObject, "GET(json Property_Names)", "Get the parameters of the property table. Pass the parameter in prop and its value is return in val_a8");
+//	cJSON_AddStringToObject(responseObject, "GETALL()", "Get all parameters of the property table.");
+	cJSON_AddStringToObject(responseObject, "CONNECT()", "Connect to NTP server.");
+	cJSON_AddStringToObject(responseObject, "STARTSYNCHTEST()", "Start the clock sync test.");
+	cJSON_AddStringToObject(responseObject, "SET_INITIAL_RTC(U64 EPOCH_MILLS)", "Sets the Epoch milliseconds.");
+	cJSON_AddStringToObject(responseObject, "STOPSYNCHTEST()", "Stop the clock sync test.");
+	cJSON_AddStringToObject(responseObject, "PROPERTIES()", "Display the values, read/write access, and help of property table.");
+	cJSON_AddStringToObject(responseObject, "SET_IMMED_MODE()", "Set NTP sync mode to immediate");
+	cJSON_AddStringToObject(responseObject, "SET_SMOOTH_MODE()", "Set NTP sync mode to smooth.");
+	cJSON_AddStringToObject(responseObject, "SET_SYNC_INTERVAL(INT SYNC_INTERVAL)", "Set NTP sync interval (msec).");
+	memset(payLoadData,0,sizeof(payLoadData));
+	cJSON_PrintPreallocated(responseObject, payLoadData, sizeof(payLoadData), false);
+	strcpy((char*)s_Message_Rx->payload_p8, payLoadData);
+	cJSON_Delete(responseObject);
+	console_send_responce_to_console_xface(s_Message_Rx);
+}//	help
+
+static void monitor(void *pvParameters __attribute__((unused))) {
+	cJSON *name_JSON = NULL;
+	cJSON *head_JSON = NULL;  //refer to head_JSON and tail as in linked list
+	char str[100] = {0};
+	uint8_t u8Result =0;
+	while (1) {
+		AMessage_st s_Message_Rx_data;
+		AMessage_st *s_Message_Rx = &s_Message_Rx_data;
+		memset(Rx_buffer,0,sizeof(Rx_buffer));
+		memset(&s_Message_Rx_data,0,sizeof(AMessage_st));
+		if (pdTRUE == xQueueReceive(NTP_Rx_Queue, (void*) (s_Message_Rx),portMAX_DELAY))
+		{
+//			printf("NTP msg_Rx_Queue S = %s, D = %s, C = %s \n", s_Message_Rx->src_Actor_a8,	s_Message_Rx->dest_Actor_a8, s_Message_Rx->cmdFun_a8);
+//			if(s_Message_Rx->payload_p8 != NULL)
+//			{
+//				if(strlen((char*)s_Message_Rx->payload_p8) != 0)
+//					printf("NTP DT = %s\n",s_Message_Rx->payload_p8);
+//			}
+			strncpy(Rx_buffer, (char*)s_Message_Rx->payload_p8,8191);
+			if(s_Message_Rx->payload_p8 != NULL)
+			{
+				console_MessageRelease_xface((char*)s_Message_Rx->payload_p8);
+				s_Message_Rx->payload_p8 = NULL;
+			}
+			s_Message_Rx->payload_p8 = (uint8_t*)Rx_buffer;
+			if (!strcmp((char*)s_Message_Rx->cmdFun_a8, "INIT")) // Get Actor Properties
+			{
+				if(FirstEntry_bool==0)
+				{
+					init(0, 0);
+				}
+				if(FirstEntry_bool==1)
+				{
+					Add_Response_msg("NTP actor is initialized.",s_Message_Rx);
+				}
+			}
+			else if (!strcmp((char*) s_Message_Rx->cmdFun_a8, "GET"))
+			{
+				Get_Property(s_Message_Rx);
+			}
+			else if (!strcmp((char*) s_Message_Rx->cmdFun_a8, "SET")) // Set Actor Properties
+			{
+				name_JSON = cJSON_Parse((char*) s_Message_Rx->payload_p8);
+				if (name_JSON == NULL) {
+					sprintf(str,"Invalid Json input at %d in %s",__LINE__,__FUNCTION__);
+					Add_Response_msg(str,s_Message_Rx);
+				    }
+				else{
+					head_JSON = name_JSON->child;
+//					cJSON *root_JSON  = cJSON_CreateObject();
+//					cJSON_AddStringToObject(root_JSON, "FILE_NAME", "A:/System/NTP.json");
+				   // Loop through each key-value pair
+				    do {
+				    	// Check if the value string is not NULL
+				    	if (cJSON_IsString(head_JSON)) //if (cJSON_IsString(head_JSON) && (strlen(head_JSON->valuestring)!= 0))
+						{
+							// Set the key-value pair
+							u8Result = set(head_JSON->string, head_JSON->valuestring,s_Message_Rx);
+							if(u8Result==1)
+							{
+//							cJSON_AddStringToObject(root_JSON, head_JSON->string, head_JSON->valuestring);
+							}
+							else if(u8Result==2){
+								sprintf(str,"'%s' is a read only property", head_JSON->string);
+								 Add_Response_msg(str, s_Message_Rx);
+							}
+//							else{
+//							cJSON_AddStringToObject(root_JSON,head_JSON->string, "Invalid Key" );
+//							}
+				        } else {
+				            // Handle the case where value string is NULL (e.g., log an error or take appropriate action)
+				            sprintf(str, "Invalid parameter '%s'", head_JSON->string);
+				            Add_Response_msg(str,s_Message_Rx);
+				            // Handle the error as per your application's requirements
+				        }
+				        head_JSON = head_JSON->next;
+				    } while (head_JSON != 0);
+
+				    if(u8Result==1){
+				    //  save parameters to JFS
+//					memset(payLoadData,0,sizeof(payLoadData));
+//					cJSON_PrintPreallocated(root_JSON, payLoadData, sizeof(payLoadData), false);
+//					Send_CMD_To_Other_Actor(FILE_SYSTEM, "FILE_SYSTEM",payLoadData,strlen(payLoadData),"WRITE_VAR");
+//				   	cJSON_Delete(root_JSON);
+				    console_send_responce_to_console_xface(s_Message_Rx);  //Send response to console interface
+				    }
+				    // Free the parsed JSON
+				    cJSON_Delete(name_JSON);
+				}
+			}
+			else if (!strcmp((char*)s_Message_Rx->cmdFun_a8, "HELP"))
+			{
+				help(s_Message_Rx);
+			}
+			else if (!strcmp((char*)s_Message_Rx->cmdFun_a8, "STARTSYNCHTEST"))
+			{
+				NTP_Synched_flag = 1;
+				gpio_set_direction(NTP_sync_pin, GPIO_MODE_OUTPUT);
+				vTaskDelay(100 / portTICK_PERIOD_MS);
+				gpio_set_level(NTP_sync_pin,0);
+				esp_timer_stop(periodic_synch_timer);
+				esp_timer_stop(periodic_timer);
+				set_second_timer_flag = 0;
+				ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 1000)); // start the timer with the period of 10sec
+				Add_Response_msg("Synch Test Start. Generate pulse at every 10 seconds interval",s_Message_Rx);
+			}
+			else if (!strcmp((char*)s_Message_Rx->cmdFun_a8, "STOPSYNCHTEST"))
+			{
+				gpio_set_direction(NTP_sync_pin, GPIO_MODE_OUTPUT);
+				vTaskDelay(100 / portTICK_PERIOD_MS);
+				gpio_set_level(NTP_sync_pin,0);
+				esp_timer_stop(periodic_synch_timer);
+				esp_timer_stop(periodic_timer);
+				set_second_timer_flag = 0;
+				Add_Response_msg("Synch Test Stopped",s_Message_Rx);
+			}
+			else if (!strcmp((char*)s_Message_Rx->cmdFun_a8, "SYNCH_NTP_RTC"))
+			{
+				apply_synch_filter = 1;
+				Add_Response_msg("NTP RTC synch applied",s_Message_Rx);
+			}
+			else if (!strcmp((char*)s_Message_Rx->cmdFun_a8, "SET_INITIAL_RTC"))
+			{
+				set_initial_time(s_Message_Rx);
+				set_RTC_time(s_Message_Rx);
+			}
+			else if (!strcmp((char*)s_Message_Rx->cmdFun_a8, "RESPONSE")) // Get Actor Properties
+			{
+				Analyse_Response(s_Message_Rx);
+			}
+			else if (!strcmp((char*)s_Message_Rx->cmdFun_a8, "SET_IMMED_MODE")) // Get Actor Properties
+			{
+				sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
+				if(sntp_get_sync_mode() == SNTP_SYNC_MODE_IMMED)
+				{
+					ntp_Para.NTP_Mode = SNTP_SYNC_MODE_IMMED;
+					Add_Response_msg("Immediate mode is set successfully.", s_Message_Rx);
+				}
+				else
+				{
+					Add_Response_msg("Error! Failed to set immediate mode.", s_Message_Rx);
+				}
+			}
+			else if (!strcmp((char*)s_Message_Rx->cmdFun_a8, "SET_SMOOTH_MODE")) // Get Actor Properties
+			{
+				sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
+				if(sntp_get_sync_mode() == SNTP_SYNC_MODE_SMOOTH)
+				{
+					ntp_Para.NTP_Mode = SNTP_SYNC_MODE_SMOOTH;
+					Add_Response_msg("Smooth mode is set successfully.", s_Message_Rx);
+				}
+				else
+				{
+					Add_Response_msg("Error! Failed to set Smooth mode.", s_Message_Rx);
+				}
+			}
+			else if (!strcmp((char*)s_Message_Rx->cmdFun_a8, "SET_SYNC_INTERVAL")) // Get Actor Properties
+			{
+				Set_NTP_Sync_Interval(s_Message_Rx);
+			}
+			else if (!strcmp((char*)s_Message_Rx->cmdFun_a8, "CONNECT")) // Get Actor Properties
+			{
+				if((ConnectHandle == NULL) && (NTP_operation ==0))
+				{
+					ConnectHandle = xTaskCreateStaticPinnedToCore(
+									NTP_Connect,                 // Task function
+									"NTP Connect",            // Task name
+									NTP_CONNECT_TASK_STACK_DEPTH,        // Stack size in words
+									s_Message_Rx,                    // Task parameters (not used here)
+									NTP_CONNECT_TASK_PRIORITY,                       // Task priority
+									NTP_TaskStack,              // Pointer to task stack (allocated in PSRAM)
+									&xNTP_CONN_TaskBuffer,             // Pointer to task control block
+									1
+					);
+					if (ConnectHandle == NULL)
+					{
+						Add_Response_msg("Failed to create task for NTP.CONNECT method.", s_Message_Rx);
+					}
+				}
+				else
+				{
+					Add_Response_msg("NTP is already connected.", s_Message_Rx);
+				}
+				if(NTP_Sync_Check_Handle == NULL)
+				{
+					NTP_Sync_Check_Handle = xTaskCreateStaticPinnedToCore(
+							        NTP_Sync_Check,                 // Task function
+									"NTP_Sync_Check",            // Task name
+									NTP_SYNC_CHECK_TASK_STACK_DEPTH,        // Stack size in words
+									NULL,                    // Task parameters (not used here)
+									NTP_SYNC_CHECK_TASK_PRIORITY,                       // Task priority
+									NTP_Sync_Check_TaskStack,              // Pointer to task stack (allocated in PSRAM)
+									&xNTP_Sync_Check_TaskBuffer,             // Pointer to task control block
+									1
+					);
+					if (NTP_Sync_Check_Handle == NULL)
+					{
+						Add_Response_msg("Failed to create a task for NTP Sync check.", s_Message_Rx);
+					}
+				}
+
+				// start ntp sync test
+
+//				NTP_Synched_flag = 1;
+//				gpio_set_direction(NTP_sync_pin, GPIO_MODE_OUTPUT);
+//				vTaskDelay(100 / portTICK_PERIOD_MS);
+//				gpio_set_level(NTP_sync_pin,0);
+//				esp_timer_stop(periodic_synch_timer);
+//				esp_timer_stop(periodic_timer);
+//				set_second_timer_flag = 0;
+//				ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 1000)); // start the timer with the period of 10sec
+//				Add_Response_msg("Synch Test Start. Generate pulse at every 10 seconds interval",s_Message_Rx);
+
+			}
+			else if (!strcmp((char*)s_Message_Rx->cmdFun_a8 , "PROPERTIES"))
+			 {
+				get_actor_properties(s_Message_Rx);
+			 }
+			else
+			{
+				 Add_Response_msg("Invalid method", s_Message_Rx);
+			}
+		}
+	}
+}
+
+
+void NTP_ConsolWriteToActor_xface(void *msg)
+{
+	AMessage_st *msg_new;
+	msg_new = (AMessage_st*)msg;
+
+	if (!FirstEntry_bool)
+	{
+		init(0,0);
+	}
+	uint8_t state = xQueueSend(NTP_Rx_Queue, msg_new, QUE_DELAY);//100, 5
+	if (state != pdTRUE)
+	{
+		if(msg_new->payload_p8 != NULL){
+		free(msg_new->payload_p8);
+		msg_new->payload_p8 = NULL;
+		}
+		if (state == errQUEUE_FULL)
+		{
+			printf("<NTP.ERROR(NTP RX Queue is full)\n");
+		}
+		else
+		{
+			printf("<NTP.ERROR(NTP RX Queue send unsuccessful)\n");
+		}
+	}
+
+}//	NTP_ConsolWriteToActor
+
+/*
+ * The callback is used to generate 50ms pulse.
+ * The GPIO pin is set from another function and then 50ms timer callback is set
+ * to reset the gpio pin after 50ms
+ */
+
+static void periodic_synch_pulse(void* arg)
+{
+	struct timeval currentTime;
+	_gettimeofday_r(NULL, &currentTime, NULL);
+	gpio_set_level(NTP_sync_pin,0);
+	esp_timer_stop(periodic_synch_timer);
+}
+/*
+ * This callback is used to trigger 1ms periodic timer at start.
+ * at every 1ms this callback checks for perfect second.
+ * once perfect second is identified same timer is stopped and restarted to identify perfect 10 seconds
+ * on perfect 10 seconds pulse is generated and timer is kept running with 10seconds callback
+ */
+static void periodic_timer_callback(void* arg)
+{
+	uint64_t milliseconds;
+	struct timeval currentTime;
+	_gettimeofday_r(NULL, &currentTime, NULL);
+	milliseconds = (uint64_t) (currentTime.tv_sec * 1000L) + (uint64_t) (currentTime.tv_usec / 1000L);
+
+	if(set_second_timer_flag==0)
+	{
+		//at start 1ms timer is set to find perfect second
+		if(((milliseconds%1000)==0) )
+		{
+			esp_timer_stop(periodic_timer);
+			//restart timer with one second callback
+			ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 1000000));
+			//printf("\n one second timer set %lld\n", milliseconds);
+			set_second_timer_flag = TEN_SECOND_TIMER_FLAG;
+
+		}
+	}
+	if(NTP_Synched_flag)
+	{
+
+		if((set_second_timer_flag==TEN_SECOND_TIMER_FLAG))
+		{
+			//at perfect second find perfect 10 seconds
+			if((milliseconds%10000)==0)
+			{
+				esp_timer_stop(periodic_timer);
+				//restart timer with ten second callback
+				ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 10000000)); // start the timer with the period of 10sec
+				//printf("\n ten second timer set %lld\n", milliseconds);
+				//generate 10 seconds pulse
+				set_second_timer_flag = GENERATE_TEN_SECOND_PULSE;
+
+			}
+			else
+			{
+				esp_timer_stop(periodic_timer);
+				set_second_timer_flag = 0;
+				ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 1000)); // start the timer with the period of 1msec
+				//printf("\n Restarted one millisecond timer %lld\n", milliseconds);
+
+			}
+
+		}
+		if(set_second_timer_flag == GENERATE_TEN_SECOND_PULSE )
+		{
+			ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_synch_timer, 50000)); // start the timer with the period of 50msec
+			gpio_set_level(NTP_sync_pin,1);
+		}
+	}
+}
+
+// Drift is measured in microseconds, so 5 ms = 5,000 µs.
+//static const int64_t DRIFT_THRESHOLD_US = 5 * 1000;
+
+// ——— State variables ——————————————————————————————————
+// Have we anchored our monotonic timer to a known-good SNTP timestamp?
+//static bool     base_offset_inited = false;
+
+//static void time_sync_notification_cb(struct timeval *tv) {
+//	struct timeval currentTime;
+//	static bool change_mode_flag = false;
+//    int64_t RTC_Epoch = 0, NTP_Epoch = 0, ESP_RTC = 0;
+//    struct tm timeinfo;
+//    // get ntp Mode & status
+//    sntp_sync_mode_t   mode = sntp_get_sync_mode();
+//    sntp_sync_status_t st   = sntp_get_sync_status();
+//    printf("\n\n Mode: %s   Status: %s \n",
+//                 mode == SNTP_SYNC_MODE_SMOOTH ? "SMOOTH" : "IMMED",
+//                 st   == SNTP_SYNC_STATUS_RESET      ? "RESET" :
+//                 st   == SNTP_SYNC_STATUS_IN_PROGRESS? "IN_PROGRESS" : "COMPLETED");
+//
+//
+//    if (in_fast_burst) {
+//        // 2) We’re still in the fast‐burst phase
+//        burst_count++;
+//        printf(" Fast burst %d/%d \n", burst_count, BURST_COUNT_MAX);
+//
+//        if (burst_count >= BURST_COUNT_MAX) {
+//            // 3) Burst complete → switch to 1 h polls
+//            sntp_set_sync_interval(SLOW_POLL_INTERVAL_MS);
+//            in_fast_burst = false;
+//            printf("Burst done  polling every %ld ms (1 hour) \n", SLOW_POLL_INTERVAL_MS);
+//
+//            // 4) Write to external RTC exactly once right now
+//            if (!rtc_written) {
+//				i2c_dev_t *dev = pcf8563_get_device_handle();
+//				gmtime_r(&tv->tv_sec, &timeinfo);  // convert epoch sec to sec,min,hr,day,month,year format
+//				int milliseconds = tv->tv_usec/1000;
+//				timeinfo.tm_year = timeinfo.tm_year + 1900 ;
+//				pcf8563_set_time_ms(dev, &timeinfo, (milliseconds/10));
+//                rtc_written = true;
+//            }
+//        }
+//    }
+//    else
+//    {
+//            // 5) This is the single slow‐phase poll, an hour later
+//    	printf("Hourly SNTP run complete → restarting fast burst \n");
+//
+//            // 6) Reset state for next burst
+//            burst_count   = 0;
+//            in_fast_burst = true;
+//            rtc_written   = false;  // allow RTC write on next burst end
+//
+//            // 7) Go back to 15 s polling
+//            sntp_set_sync_interval(FAST_POLL_INTERVAL_MS);
+//            printf("Now polling every %ld ms (fast burst restarted) \n",FAST_POLL_INTERVAL_MS);
+//        }
+//    printf("\n");
+//}
+
+
+//static void time_sync_notification_cb(struct timeval *tv) {
+//	struct timeval currentTime;
+//	static bool change_mode_flag = false;
+//    int64_t RTC_Epoch = 0, NTP_Epoch = 0, ESP_RTC = 0;
+//    struct tm timeinfo;
+//    // get ntp Mode & status
+//    sntp_sync_mode_t   mode = sntp_get_sync_mode();
+//    sntp_sync_status_t st   = sntp_get_sync_status();
+//    printf("\n\n Mode: %s   Status: %s \n",
+//                 mode == SNTP_SYNC_MODE_SMOOTH ? "SMOOTH" : "IMMED",
+//                 st   == SNTP_SYNC_STATUS_RESET      ? "RESET" :
+//                 st   == SNTP_SYNC_STATUS_IN_PROGRESS? "IN_PROGRESS" : "COMPLETED");
+////    Capture both clocks for drift calc
+//    int64_t timer_us = esp_timer_get_time();   // µs since boot
+//    struct timeval now; gettimeofday(&now, NULL);
+//    int64_t sys_us   = (int64_t)now.tv_sec * 1000000LL + now.tv_usec; // µs since epoch
+//
+//    // If we have a valid SNTP sync, compute drift and adjust polling
+//    if (st != SNTP_SYNC_STATUS_RESET) {
+//        if (!offset_captured) {
+//            // anchor timer→epoch mapping on first sync
+//            base_offset_us    = sys_us - timer_us;
+//            offset_captured   = true;
+//            printf("Base offset set: %lld us\n", base_offset_us);
+//        }
+//        int64_t delta_us = (sys_us - timer_us) - base_offset_us;
+//         printf(" Current drift: %lld us \n", delta_us);
+//
+//         // a) Switch to 1 h polls if drift is small
+//         if (!using_slow_interval &&
+//             delta_us > -DRIFT_THRESHOLD_US &&
+//             delta_us <  DRIFT_THRESHOLD_US)
+//         {
+//
+//             sntp_set_sync_interval(SLOW_POLL_INTERVAL_MS);
+//             using_slow_interval = true;
+//             printf("Drift within %lld us; polling every %ld ms now \n", DRIFT_THRESHOLD_US, SLOW_POLL_INTERVAL_MS);
+//        	 printf("Set external RTC \n");
+////             external_rtc_write_time(tv);
+//        	 i2c_dev_t *dev = pcf8563_get_device_handle();
+//			gmtime_r(&tv->tv_sec, &timeinfo);  // convert epoch sec to sec,min,hr,day,month,year format
+//			int milliseconds = tv->tv_usec/1000;
+//			timeinfo.tm_year = timeinfo.tm_year + 1900 ;
+//			pcf8563_set_time_ms(dev, &timeinfo, (milliseconds/10));
+//
+//         }
+//         // b) Revert to 15 s polls if drift gets large again
+//         else if (using_slow_interval &&
+//                 (delta_us <= -DRIFT_THRESHOLD_US ||
+//                  delta_us >=  DRIFT_THRESHOLD_US))
+//         {
+//             sntp_set_sync_interval(FAST_POLL_INTERVAL_MS);
+//             using_slow_interval = false;
+//             printf("Drift exceeded %lld us; polling every %ld ms now \n", DRIFT_THRESHOLD_US, FAST_POLL_INTERVAL_MS);
+//         }
+//
+//         // 5) **Write** to the external RTC only once per “COMPLETED” event
+//         if (st == SNTP_SYNC_STATUS_COMPLETED) {
+////        	 printf("Set external RTC \n");
+//////             external_rtc_write_time(tv);
+////        	 i2c_dev_t *dev = pcf8563_get_device_handle();
+////			gmtime_r(&tv->tv_sec, &timeinfo);  // convert epoch sec to sec,min,hr,day,month,year format
+////			int milliseconds = tv->tv_usec/1000;
+////			timeinfo.tm_year = timeinfo.tm_year + 1900 ;
+////			pcf8563_set_time_ms(dev, &timeinfo, (milliseconds/10));
+//
+//         }
+//     } else {
+//         printf(" Drift unavailable: SNTP not yet synced \n");
+//     }
+//    printf("\n");
+//}
+
+#ifdef CONFIG_SNTP_TIME_SYNC_METHOD_CUSTOM
+void sntp_sync_time(struct timeval *tv)
+{
+   settimeofday(tv, NULL);
+#ifdef ENABLE_PRINT_MSG
+   printf("Time is synchronized from custom code");
+#endif
+   sntp_set_sync_status(SNTP_SYNC_STATUS_COMPLETED);
+}
+#endif
+
+static void initialize_sntp(void) {
+    NTP_sync_time();
+
+    if (esp_sntp_enabled()) {
+        return;
+    } else {
+        esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+        esp_sntp_setservername(0, ntp_Para.URL);
+        esp_sntp_setservername(1, "time.google.com");
+	    esp_sntp_setservername(2, "time.windows.com");   // Tertiary NTP server
+
+//        sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
+//        ntp_Para.NTP_Mode = SNTP_SYNC_MODE_SMOOTH;
+        sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
+        ntp_Para.NTP_Mode = SNTP_SYNC_MODE_IMMED;
+        // Perform initial quick sync
+//        sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+        esp_sntp_init();
+
+        // 5) Prime state
+        burst_count     = 0;
+        in_fast_burst   = true;
+        rtc_written     = false;
+
+        // Wait for the initial sync to complete (you might want to add a mechanism to ensure this)
+        while (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED) {
+            vTaskDelay(2000 / portTICK_PERIOD_MS);
+        }
+    }
+}
+
+void NTP_sync_time(void)
+{
+	sntp_set_sync_interval(ntp_Para.sync_interval);
+	if (sntp_restart()==1)
+	{
+		NTPstatus = SNTP_SYNC_STATUS_RESET;
+	}
+}
+
+
+
+static void Analyse_Response(AMessage_st* s_Message_Rx)
+{
+	cJSON *in_JSON 		= NULL;
+	cJSON *name_JSON 	= NULL;
+	char  str[200] = {0}; // keyValue[50] = {0};
+	uint8_t	temp[10];
+
+	if(s_Message_Rx->payload_p8 == NULL)
+		return;
+
+	if(strlen((char*)s_Message_Rx->payload_p8) == 0)
+		return;
+
+	in_JSON 		= cJSON_Parse((char*) s_Message_Rx->payload_p8);
+	if (in_JSON == NULL) {
+		printf("\n NTP s_Message_Rx->payload_p8 = %s \n",(char*)s_Message_Rx->payload_p8);
+		sprintf(str,"Invalid Json input at %d in %s",__LINE__,__FUNCTION__);
+		Add_Response_msg(str,s_Message_Rx);
+		return;
+	}
+	else
+	{
+		// Obtain the COMMAND and RESPONSE keys
+		cJSON *commandKey = cJSON_GetObjectItem(in_JSON, "COMMAND");
+		cJSON *responseKey = cJSON_GetObjectItem(in_JSON, "RESPONSE");
+
+		if (commandKey != NULL && responseKey != NULL)
+		{				
+			memset(payLoadData,0,sizeof(payLoadData));
+			cJSON_PrintPreallocated(responseKey, payLoadData, sizeof(payLoadData), false);
+			printf(">%s.%s(%s, MSG ID:%d, %s)\n", s_Message_Rx->src_Actor_a8, commandKey->valuestring,  payLoadData, s_Message_Rx->ucMessageID_u16, THIS_ACTOR);
+		}
+		// Free the parsed JSON
+		cJSON_Delete(in_JSON);
+	}
+
+//	if(strcmp((char*)s_Message_Rx->src_Actor_a8,"FILE_SYSTEM")==0)
+//	{
+//		in_JSON 		= cJSON_Parse((char*) s_Message_Rx->payload_p8);
+//		if (in_JSON == NULL) {
+//			sprintf(str,"Invalid Json input at %d in %s",__LINE__,__FUNCTION__);
+//			Add_Response_msg(str,s_Message_Rx);
+//			return;
+//		}
+//
+//		cJSON *commandKey = cJSON_GetObjectItem(in_JSON, "COMMAND");
+//		if (cJSON_IsString(commandKey) && (strcmp(commandKey->valuestring,"READ")==0))
+//		{
+//			cJSON *root = cJSON_GetObjectItem(in_JSON, "RESPONSE");
+//			if (root != NULL)
+//			{
+//				// Iterate over the keys
+//				cJSON *currentItem = root->child;
+//				if(currentItem->valuestring != NULL)
+//				{
+//					if(!strcmp(currentItem->valuestring, "System/NTP.json"))
+//					{
+//						currentItem = currentItem->next;
+//						while (currentItem != NULL)
+//						{
+//							// Check the type of the value
+//							if (cJSON_IsString(currentItem))
+//							{
+//								set(currentItem->string, currentItem->valuestring,s_Message_Rx);
+//							}
+//							else if (cJSON_IsNumber(currentItem))
+//							{
+//								sprintf(keyValue, "%d", currentItem->valueint);
+//								set(currentItem->string, keyValue,s_Message_Rx);
+//							}
+//							if((strcmp(currentItem->string, "RTC_STATUS")) == 0)
+//							{
+//								if(currentItem->valueint != RTC_NEVER_SET)
+//								{
+//									// Enable events
+//									cJSON *my_JSON1 = cJSON_CreateObject();
+//									cJSON_AddNumberToObject(my_JSON1, "EVT_TASK_DIS_FLAG", 1);
+//									memset(payLoadData,0,sizeof(payLoadData));
+//									cJSON_PrintPreallocated(my_JSON1, payLoadData, sizeof(payLoadData), false);
+//									Send_CMD_To_Other_Actor(EVENT_ACTOR,"EVENT_ACTOR", payLoadData, strlen(payLoadData), "SETEVTTASKFG");
+//									cJSON_Delete(my_JSON1);
+//									printf("\n\n event execution is enabled \n\n");
+//								}
+//							}
+//							// Move to the next key-value pair
+//							currentItem = currentItem->next;
+//						}
+//					}
+////					else
+////					{
+////						char val [300]=  {0};
+////						getAll(NULL,val,NULL);
+////					}
+//
+//				}
+//			 }
+//		cJSON_Delete(in_JSON);
+//		return;
+//	 }
+//	}
+	 if(strcmp((char*)s_Message_Rx->src_Actor_a8,"CONSOLE")==0)
+	 {
+		in_JSON 		= cJSON_Parse((char*) s_Message_Rx->payload_p8);
+		if (in_JSON == NULL) {
+			sprintf(str,"Invalid Json input at %d in %s",__LINE__,__FUNCTION__);
+			Add_Response_msg(str,s_Message_Rx);
+			return;
+		}
+		cJSON *responseKey = cJSON_GetObjectItem(in_JSON, "RESPONSE");
+		if (responseKey != NULL && cJSON_IsString(responseKey->child))
+		{
+			name_JSON 		= cJSON_GetObjectItem(responseKey, "NET_STATUS");
+			if((name_JSON != NULL) && (cJSON_IsString(name_JSON)))
+			{
+				strcpy((char*)temp,name_JSON->valuestring);
+				NET_status = (uint8_t) (temp[0]-0x30);  // convert ASCII to hex
+			}
+		}
+		cJSON_Delete(in_JSON);
+		return;
+	 }
+	return;
+}
+
+
+static void set_RTC_time(AMessage_st* s_Message_Rx) {
+    cJSON *in_JSON 		= NULL;
+    struct timeval currentTime;
+    char str[200] = {0};
+	in_JSON 		= cJSON_Parse((char*) s_Message_Rx->payload_p8);
+	if (in_JSON == NULL) {
+		sprintf(str,"Invalid Json input at %d in %s",__LINE__,__FUNCTION__);
+		Add_Response_msg(str,s_Message_Rx);
+	}
+
+	cJSON *commandKey = cJSON_GetObjectItem(in_JSON, "EPOCH_MILLS");
+	if((commandKey!=NULL) && cJSON_IsNumber(commandKey) )
+	{
+		uint64_t epochUTCmilliseconds=commandKey->valuedouble;
+		currentTime.tv_sec =  (epochUTCmilliseconds)/1000L;
+		currentTime.tv_usec = ((epochUTCmilliseconds%1000)*1000);
+	}
+	cJSON_Delete(in_JSON);
+    // Get the current time of external RTC
+//	struct tm RTC_time = {0};
+//	uint8_t timems = 0;
+//	time_t tOfDay = 0;
+//	i2c_dev_t *dev = pcf8563_get_device_handle();
+//	if (pcf8563_get_time_ms(dev, &RTC_time, &timems) == ESP_OK) {
+//		RTC_time.tm_year-=1900;
+//		tOfDay = mktime(&RTC_time);
+//		printf("\n\n RTC tOfDay = %lld \n\n", tOfDay);
+//	}
+
+	//printf("\n\n DA (abs((int)tOfDay - (int)currentTime.tv_sec)) = %d \n\n", (abs((int)tOfDay - (int)currentTime.tv_sec)));
+    // Set time only if current time is less than the initial time
+   // if ((abs((int)tOfDay - (int)currentTime.tv_sec)) >= 30)   //120
+//    {
+		time_t now;
+		struct tm timeinfo;
+		time(&now);
+		localtime_r(&now, &timeinfo);
+		struct tm time = {
+			.tm_year = timeinfo.tm_year + 1900,
+			.tm_mon  = timeinfo.tm_mon,  // 0-based
+			.tm_mday = timeinfo.tm_mday,
+			.tm_hour = timeinfo.tm_hour,
+			.tm_min  = timeinfo.tm_min,
+			.tm_sec  = timeinfo.tm_sec
+		};
+//		 printf("RTC Time - Day %d, Month %d, Year %d, Hour %d, Minute %d, Seconds %d\n", time.tm_mday, time.tm_mon+1, time.tm_year, time.tm_hour, time.tm_min, time.tm_sec);
+		i2c_dev_t *dev = pcf8563_get_device_handle();
+		int milliseconds = (currentTime.tv_usec / 1000L);
+
+		if ((pcf8563_set_time_ms(dev, &time, (milliseconds/10))) != ESP_OK) {
+			Add_Response_msg("NTP RTC synch failed",s_Message_Rx);
+		}
+		else {
+			Add_Response_msg("External RTC time is set.",s_Message_Rx);
+			//Add_Response_msg("NTP RTC synch applied using device announce response",s_Message_Rx);
+			ntp_Para.RTC_Status = RTC_DEVICE_ANNOUNCE;
+			// Enable event execution
+//			cJSON *my_JSON1 = cJSON_CreateObject();
+//			cJSON_AddNumberToObject(my_JSON1, "EVT_TASK_DIS_FLAG", 1);
+//			memset(payLoadData,0,sizeof(payLoadData));
+//			cJSON_PrintPreallocated(my_JSON1, payLoadData, sizeof(payLoadData), false);
+//			Send_CMD_To_Other_Actor(EVENT_ACTOR,"EVENT_ACTOR", payLoadData, strlen(payLoadData), "SETEVTTASKFG");
+//			cJSON_Delete(my_JSON1);
+
+			// Store RTC status in the JFS file
+//			cJSON *responseObject = cJSON_CreateObject();
+//			cJSON_AddStringToObject(responseObject, "FILE_NAME","A:/System/NTP.json");
+//			cJSON_AddNumberToObject(responseObject, "RTC_STATUS",ntp_Para.RTC_Status);
+//			memset(payLoadData,0,sizeof(payLoadData));
+//			cJSON_PrintPreallocated(responseObject, payLoadData, sizeof(payLoadData), false);
+//			cJSON_Delete(responseObject);
+//			Send_CMD_To_Other_Actor(FILE_SYSTEM,"FILE_SYSTEM", payLoadData, strlen(payLoadData), "WRITE_VAR");
+			// printf("RTC time set - Day %d, Month %d, Year %d, Hour %d, Minute %d, Seconds %d\n", time.tm_mday, time.tm_mon+1, time.tm_year, time.tm_hour, time.tm_min, time.tm_sec);
+		}
+//    }
+//    else
+//    {
+//    	Add_Response_msg("As the difference between RTC and NTP time is less than 30 sec, RTC synch is not applied",s_Message_Rx);
+//    }
+}
+
+
+// Function to set an initial time
+static void set_initial_time(AMessage_st* s_Message_Rx) {
+    cJSON *in_JSON 		= NULL;
+    struct timeval currentTime;
+    char str[200] = {0};
+	in_JSON 		= cJSON_Parse((char*) s_Message_Rx->payload_p8);
+	if (in_JSON == NULL) {
+		sprintf(str,"Invalid Json input at %d in %s",__LINE__,__FUNCTION__);
+		Add_Response_msg(str,s_Message_Rx);
+	}
+
+	cJSON *commandKey = cJSON_GetObjectItem(in_JSON, "EPOCH_MILLS");
+	if((commandKey!=NULL) && cJSON_IsNumber(commandKey) )
+	{
+		uint64_t epochUTCmilliseconds=commandKey->valuedouble;
+		currentTime.tv_sec =  (epochUTCmilliseconds)/1000L;
+		currentTime.tv_usec = ((epochUTCmilliseconds%1000)*1000);
+	}
+	cJSON_Delete(in_JSON);
+    // Get the current time
+    struct timeval now;
+    gettimeofday(&now, NULL);
+
+    // Set time only if current time is less than the initial time
+//    if (abs((int)now.tv_sec - (int)currentTime.tv_sec) >= 30)   //120
+    {
+    	settimeofday(&currentTime, NULL);
+    	Add_Response_msg("Internal RTC time is set.",s_Message_Rx);
+        //ESP_LOGI("TIME", "System time set to initial time");
+    } 
+//    else {
+//        ESP_LOGI("TIME", "System time is already ahead of initial time, no change made");
+//    }
+}
+
+
+static void NTP_Connect(void *pvParameters __attribute__((unused)))
+{
+	AMessage_st* s_Message_Rx = (AMessage_st*)pvParameters;
+	AMessage_st s_Message_Rx_data;
+	char data_buffer[200] = {0}, payLoadData_NTP[200] = {0};
+	memset(data_buffer,0,sizeof(data_buffer));
+	memcpy(&s_Message_Rx_data, s_Message_Rx, sizeof(AMessage_st));
+	s_Message_Rx_data.payload_p8 = (uint8_t*)data_buffer;
+    strcpy((char*)s_Message_Rx_data.src_Actor_a8, "CONSOLE");
+    strcpy((char*)s_Message_Rx_data.dest_Actor_a8, "NTP");
+    strcpy((char*)s_Message_Rx_data.cmdFun_a8, "CONNECT");
+
+	char count = 0, display_msg = 0;
+	cJSON *my_JSON1  	= cJSON_CreateArray();
+	cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("NET_STATUS"));
+	cJSON *jsonObject = cJSON_CreateObject();
+	cJSON_AddItemToObject(jsonObject, "Property_Names", my_JSON1);
+	memset(payLoadData_NTP,0,sizeof(payLoadData_NTP));
+	cJSON_PrintPreallocated(jsonObject, payLoadData_NTP, sizeof(payLoadData_NTP), false);
+	cJSON_Delete(jsonObject);
+	Send_CMD_To_Other_Actor(CONSOLE,"CONSOLE", payLoadData_NTP, strlen(payLoadData_NTP), "GET");
+
+	while(1)
+	{
+		if(NET_status == E_NET_CONNECTED)
+		{
+			strcpy(ntp_Para.URL,(const char*)"pool.ntp.org");
+			strcpy(ntp_Para.time_zone,(const char*)"UTC");
+//			ntp_Para.sync_interval=60000;
+//			initialize_sntp();
+			Add_Response_msg("Connected to NTP",&s_Message_Rx_data);
+			NTP_operation = 1;
+		}
+		else
+		{
+			count++;
+			if((count > 100) && (display_msg == 0))
+			{
+				display_msg = 1;
+				Add_Response_msg("Kindly connect to internet at first.",&s_Message_Rx_data);
+				ConnectHandle = NULL;
+				vTaskDelete(ConnectHandle);
+			}
+		}
+		if(NTP_operation == 1)
+		{
+			ConnectHandle = NULL;
+			vTaskDelete(ConnectHandle);  // Delete the task
+		}
+		vTaskDelay(10 / portTICK_PERIOD_MS);
+	}
+}
+static void Send_CMD_To_Other_Actor(char dest_id, const char *DestActor, char *response, int16_t size, char *function)
+{
+	AMessage_st s_Message_Tx_new;
+	uint8_t *newpointer  		= (uint8_t*) heap_caps_calloc((strlen(response)+1),sizeof(uint8_t),MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); //strlen((char*)out_val + 1)
+	if (newpointer == NULL)
+	{
+		printf("Memory allocation failed\n");
+		return;
+	}
+	strcpy((char*)newpointer, response);
+	s_Message_Tx_new.payload_p8 	=  newpointer;
+	s_Message_Tx_new.Dest_ID_a8 = dest_id;
+	s_Message_Tx_new.payload_size = size;  //0 , size;  // if you don't want to free payload at dest actor then give payload size =0
+	s_Message_Tx_new.ucMessageID_u16 = ++s_Message_Tx.ucMessageID_u16; //s_Message_Tx.ucMessageID_u16;
+	strcpy((char*) s_Message_Tx_new.src_Actor_a8	, THIS_ACTOR);
+	strcpy((char*) s_Message_Tx_new.dest_Actor_a8	, DestActor);
+	strcpy((char*) s_Message_Tx_new.cmdFun_a8		, function);
+	console_ActorWriteToConsole_xface( &s_Message_Tx_new);
+} //	COP_add_response_to_COP_Tx_Queue
+
+
+static void Add_Response_msg(char* buffer, AMessage_st* s_Message_Rx)
+{
+	cJSON *responseObject = cJSON_CreateObject();  	// Create a RESPONSE object and add it to the RESPONSE array
+	cJSON_AddStringToObject(responseObject, "RESP", buffer);
+	memset(payLoadData,0,sizeof(payLoadData));//\0';
+	cJSON_PrintPreallocated(responseObject, payLoadData, sizeof(payLoadData), false);
+	strcpy((char*)s_Message_Rx->payload_p8, payLoadData);		
+	console_send_responce_to_console_xface(s_Message_Rx);
+	cJSON_Delete(responseObject);
+}
+
+static void Set_NTP_Sync_Interval(AMessage_st* s_Message_Rx)
+{
+    cJSON *in_JSON 		= NULL;
+    char str[200] = {0};
+	in_JSON 		= cJSON_Parse((char*) s_Message_Rx->payload_p8);
+	if (in_JSON == NULL) {
+		sprintf(str,"Invalid JSON input at %d in %s",__LINE__,__FUNCTION__);
+		Add_Response_msg(str,s_Message_Rx);
+	}
+
+	cJSON *SYNC_INTERVAL = cJSON_GetObjectItem(in_JSON, "SYNC_INTERVAL");
+	if((SYNC_INTERVAL!=NULL) && cJSON_IsNumber(SYNC_INTERVAL) )
+	{
+		ntp_Para.sync_interval = SYNC_INTERVAL->valueint;
+		sntp_set_sync_interval(ntp_Para.sync_interval);
+		sprintf(str,"NTP sync interval is set to %ld.", ntp_Para.sync_interval);
+		Add_Response_msg(str,s_Message_Rx);
+	}
+	cJSON_Delete(in_JSON);
+}
+
+
+
+// Configuration parameters for NTP sampling, filtering, and timing
+#define NTP_SERVERS {"pool.ntp.org", "north-america.pool.ntp.org", "asia.pool.ntp.org", "europe.pool.ntp.org", "time.google.com", "time.windows.com"}
+#define NTP_QUERY_COUNT            8
+#define INITIAL_POLL_INTERVAL_S    20
+#define STEADY_POLL_INTERVAL_S     60
+#define INITIAL_SYNC_CYCLES        4
+#define RTT_OUTLIER_THRESHOLD      1.2
+#define OFFSET_OUTLIER_THRESHOLD   300000
+#define MAX_RTT_MS                 5
+#define TASK_PRIORITY             (tskIDLE_PRIORITY + 5)
+#define OFFSET_HISTORY_SIZE        8
+#define ABSOLUTE_OFFSET_THRESHOLD_US  (500LL * 1000LL)
+#define WARMUP_CYCLES               3
+#define WARMUP_ABSOLUTE_CAP_US   5000000L
+#define WARMUP_RTT_THRESHOLD_US   (200 * 1000)
+
+typedef struct {
+    int64_t offset_us;
+    int64_t rtt_us;
+    bool    valid;
+} ntp_sample_t;
+
+// Globals for tracking state across sync cycles
+static volatile bool ntp_initialized = false;
+static int64_t last_offset_us = 0;
+static int64_t avg_drift_us_per_s = 0;
+static int sync_cycle_count = 0;
+static int64_t offset_history[OFFSET_HISTORY_SIZE] = {0};
+static int offset_history_idx = 0;
+static int offset_history_count = 0;
+
+// Calculate median RTT from valid samples
+static float calculate_median_rtt(ntp_sample_t *samples, int count) {
+    double values[NTP_QUERY_COUNT];
+    int n = 0;
+    for (int i = 0; i < count; i++)
+        if (samples[i].valid)
+            values[n++] = (double)samples[i].rtt_us;
+    if (n == 0) return 0.0;
+    // insertion sort
+    for (int i = 1; i < n; i++) {
+        double key = values[i];
+        int j = i - 1;
+        while (j >= 0 && values[j] > key) {
+            values[j + 1] = values[j];
+            j--;
+        }
+        values[j + 1] = key;
+    }
+    return (n % 2 == 0)
+         ? (values[n/2 - 1] + values[n/2]) * 0.5
+         : values[n/2];
+}
+
+// Compute mean of stored offsets
+static int64_t calculate_mean_offset(void) {
+    if (offset_history_count == 0) return 0;
+    int64_t sum = 0;
+    for (int i = 0; i < offset_history_count; i++)
+        sum += offset_history[i];
+    return sum / offset_history_count;
+}
+
+// Add a new offset to the circular history buffer
+static void update_offset_history(int64_t offset_us) {
+    offset_history[offset_history_idx] = offset_us;
+    offset_history_idx = (offset_history_idx + 1) % OFFSET_HISTORY_SIZE;
+    if (offset_history_count < OFFSET_HISTORY_SIZE)
+        offset_history_count++;
+}
+
+// Decide whether a given offset is within acceptable bounds
+static bool is_offset_valid(int64_t offset_us) {
+    int64_t abs_off = llabs(offset_us);
+
+    if (sync_cycle_count < WARMUP_CYCLES) {
+        if (abs_off > WARMUP_ABSOLUTE_CAP_US) return false;
+        return true;
+    }
+    if (sync_cycle_count < INITIAL_SYNC_CYCLES) {
+        if (abs_off > ABSOLUTE_OFFSET_THRESHOLD_US) return false;
+        return true;
+    }
+    if (offset_history_count < OFFSET_HISTORY_SIZE) {
+        return true;
+    }
+    int64_t mean = calculate_mean_offset();
+    int64_t delta = llabs(offset_us - mean);
+    return (delta <= OFFSET_OUTLIER_THRESHOLD);
+}
+
+// Compute mean and standard deviation of RTTs (for logging)
+static void calculate_stats(ntp_sample_t *samples, int count, double *mean_rtt, double *std_dev_rtt) {
+    double sum = 0.0, var = 0.0;
+    int n = 0;
+    for (int i = 0; i < count; i++)
+        if (samples[i].valid) {
+            sum += samples[i].rtt_us;
+            n++;
+        }
+    *mean_rtt = (n > 0) ? (sum / n) : 0.0;
+    for (int i = 0; i < count; i++)
+        if (samples[i].valid) {
+            double d = samples[i].rtt_us - *mean_rtt;
+            var += d * d;
+        }
+    *std_dev_rtt = (n > 1) ? sqrt(var / (n - 1)) : 0.0;
+}
+
+// Variables for converting between epoch and monotonic times
+#define NTP_PORT        "123"
+#define NTP_PACKET_SIZE 48
+#define NTP_TIMESTAMP_DELTA 2208988800UL
+static int64_t boot_time_epoch_us;
+static int64_t boot_time_uptime_us;
+
+// Record base times once SNTP has initially set the system clock
+static void record_boot_time_base(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    boot_time_epoch_us  = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec;
+    boot_time_uptime_us = esp_timer_get_time();
+}
+
+// Perform one raw UDP NTP exchange; compute offset & RTT in µs
+#include <errno.h>
+#include <arpa/inet.h>
+
+// …
+
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <sys/time.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+
+#define NTP_PORT            "123"
+#define NTP_PACKET_SIZE     48
+#define NTP_TIMESTAMP_DELTA 2208988800UL
+
+static bool ntp_raw_sample(const char *server, int64_t *offset_us, int64_t *rtt_us) {
+    struct addrinfo hints = {
+        .ai_family   = AF_INET,
+        .ai_socktype = SOCK_DGRAM
+    };
+    struct addrinfo *res = NULL;
+    int err = getaddrinfo(server, NTP_PORT, &hints, &res);
+    if (err != 0 || res == NULL) {
+        printf("DNS lookup failed for %s: err=%d\n", server, err);
+        return false;
+    }
+
+    // Show which IP we’ll send to
+    {
+        char addrbuf[INET_ADDRSTRLEN];
+        struct sockaddr_in *sin = (struct sockaddr_in*)res->ai_addr;
+        inet_ntop(AF_INET, &sin->sin_addr, addrbuf, sizeof(addrbuf));
+        printf("Resolved %s → %s:%d\n", server, addrbuf, ntohs(sin->sin_port));
+    }
+
+    int sock = socket(res->ai_family, res->ai_socktype, 0);
+    if (sock < 0) {
+        printf("socket() failed: errno=%d\n", errno);
+        freeaddrinfo(res);
+        return false;
+    }
+
+    // Build NTP request packet (LI=0, VN=3, Mode=3)
+    uint8_t pkt[NTP_PACKET_SIZE] = {0};
+    pkt[0] = 0x1B;
+
+    // --- T1: local send timestamp (epoch µs) ---
+    struct timeval tv1;
+    gettimeofday(&tv1, NULL);
+    int64_t t1_us = (int64_t)tv1.tv_sec * 1000000LL + tv1.tv_usec;
+
+    // Send the NTP request
+    int sent = sendto(sock, pkt, NTP_PACKET_SIZE, 0, res->ai_addr, res->ai_addrlen);
+    if (sent < 0) {
+        printf("sendto() failed: errno=%d\n", errno);
+        close(sock);
+        freeaddrinfo(res);
+        return false;
+    }
+    printf("Sent %d bytes to NTP server\n", sent);
+
+    // Wait up to 3 seconds for a reply
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(sock, &rfds);
+    struct timeval timeout = { .tv_sec = 3, .tv_usec = 0 };
+    int sel = select(sock + 1, &rfds, NULL, NULL, &timeout);
+    if (sel < 0) {
+        printf("select() error: errno=%d\n", errno);
+        close(sock);
+        freeaddrinfo(res);
+        return false;
+    } else if (sel == 0) {
+        printf("select() timed out waiting for NTP response\n");
+        close(sock);
+        freeaddrinfo(res);
+        return false;
+    }
+
+    // Receive the NTP reply
+    int rec = recvfrom(sock, pkt, NTP_PACKET_SIZE, 0, NULL, NULL);
+    // --- T4: local receive timestamp (epoch µs) ---
+    struct timeval tv4;
+    gettimeofday(&tv4, NULL);
+    int64_t t4_us = (int64_t)tv4.tv_sec * 1000000LL + tv4.tv_usec;
+
+    if (rec < 0) {
+        printf("recvfrom() failed: errno=%d\n", errno);
+        close(sock);
+        freeaddrinfo(res);
+        return false;
+    }
+    printf("Received %d bytes from NTP server\n", rec);
+
+    close(sock);
+    freeaddrinfo(res);
+
+    // --- Decode server's transmit timestamp (T3) from bytes 40–47 ---
+    uint32_t tx_secs = ntohl(*(uint32_t*)&pkt[40]);
+    uint32_t tx_frac = ntohl(*(uint32_t*)&pkt[44]);
+
+    // Convert NTP seconds to UNIX epoch seconds
+    time_t server_secs = (time_t)(tx_secs - NTP_TIMESTAMP_DELTA);
+    // Convert fraction to microseconds
+    uint32_t server_frac_us = (uint32_t)((uint64_t)tx_frac * 1000000ULL >> 32);
+
+    // Build full server timestamp in µs since 1970
+    int64_t t3_us = (int64_t)server_secs * 1000000LL + server_frac_us;
+    printf("Server time: %lld.%06u (epoch s.us)\n",
+           (long long)server_secs, (unsigned)server_frac_us);
+
+    // --- Compute round-trip time and offset ---
+    *rtt_us    = t4_us - t1_us;
+    *offset_us = t3_us - ((t1_us + t4_us) / 2);
+
+    printf("Computed RTT=%lld us, offset=%lld us\n",
+           (long long)*rtt_us, (long long)*offset_us);
+
+    return true;
+}
+
+
+static int64_t offs=0, rtt=0;
+// Gather multiple raw samples, apply filtering, fill samples[]
+static void collect_ntp_samples(ntp_sample_t *samples, int count) {
+    const char *servers[] = NTP_SERVERS;
+    int nservers = sizeof(servers)/sizeof(servers[0]);
+    for (int i = 0; i < count; i++) {
+        samples[i].valid = false;
+        int si = i % nservers;
+//        int64_t offs=0, rtt=0;
+        if (!ntp_raw_sample(servers[si], &offs, &rtt)) {
+            continue;
+        }
+        if (sync_cycle_count < WARMUP_CYCLES && rtt > WARMUP_RTT_THRESHOLD_US) {
+            continue;
+        }
+        if (rtt < 0 || rtt > MAX_RTT_MS*1000000) {
+            continue;
+        }
+        if (!is_offset_valid(offs)) {
+            continue;
+        }
+        samples[i].offset_us = offs;
+        samples[i].rtt_us    = rtt;
+        samples[i].valid     = true;
+        update_offset_history(offs);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+// From valid samples, choose the one with lowest RTT within cutoff
+static bool select_best_sample(ntp_sample_t *samples, int count, int64_t *best_offset_us, int64_t *best_rtt_us) {
+    double median = calculate_median_rtt(samples, count);
+    double cutoff = median * RTT_OUTLIER_THRESHOLD;
+    int64_t min_rtt = INT64_MAX; int best_i = -1;
+    for (int i = 0; i < count; i++) {
+        if (!samples[i].valid || samples[i].rtt_us > cutoff) continue;
+        if (samples[i].rtt_us < min_rtt) {
+            min_rtt = samples[i].rtt_us;
+            best_i = i;
+        }
+    }
+    if (best_i < 0) return false;
+    *best_offset_us = samples[best_i].offset_us;
+    *best_rtt_us    = samples[best_i].rtt_us;
+    return true;
+}
+
+// Read external RTC until two reads differ by <1 ms
+static uint64_t read_rtc_epoch_ms(i2c_dev_t *dev) {
+    struct tm tm; uint8_t centi;
+    if (pcf8563_get_time_ms(dev, &tm, &centi) != ESP_OK) return UINT64_MAX;
+    tm.tm_year -= 1900;
+    time_t secs = mktime(&tm);
+    return (uint64_t)secs * 1000ULL + centi * 10ULL;
+}
+esp_err_t get_stable_rtc_time_ms(i2c_dev_t *dev, uint64_t *out_ms) {
+    if (!dev || !out_ms) return ESP_ERR_INVALID_ARG;
+    uint64_t t_prev = read_rtc_epoch_ms(dev);
+    if (t_prev == UINT64_MAX) return ESP_FAIL;
+    for (int i = 0; i < 10; i++) {
+        uint64_t t_cur = read_rtc_epoch_ms(dev);
+        if (t_cur == UINT64_MAX) return ESP_FAIL;
+        if (t_cur >= t_prev && (t_cur - t_prev) < 1) {
+            *out_ms = t_cur;
+            return ESP_OK;
+        }
+        t_prev = t_cur;
+    }
+    return ESP_FAIL;
+}
+
+static void epoch_us_to_timeval(int64_t epoch_us, struct timeval *tv) {
+    tv->tv_sec  = epoch_us / 1000000;
+    tv->tv_usec = epoch_us % 1000000;
+}
+
+/**
+ * Returns 0=Sunday…6=Saturday from epoch,
+ * without any libc date routines.
+ */
+int epoch_to_wday_plain(time_t epoch) {
+    // count whole days since Jan 1 1970
+    int64_t days = epoch / 86400;
+    // Jan 1 1970 was Thursday == 4
+    int wday = (int)((days + 4) % 7);
+    // handle negative epochs correctly
+    if (wday < 0) wday += 7;
+    return wday;
+}
+
+// NTP sync task
+static void NTP_Sync_Check(void *pvParameters) {
+	struct timeval currentTime;
+	int64_t RTC_Epoch = 0, ESP_RTC = 0;
+	int64_t offset_us;
+	int64_t rtt_us;
+	int milliseconds = 0, RTC_milliseconds = 0;
+	struct timeval delta = {0};
+	struct tm timeinfo;
+	struct tm RTC_time = {0};
+	uint8_t timems = 0;
+	time_t tOfDay = 0;
+	sntp_sync_status_t sync_status = SNTP_SYNC_STATUS_RESET;
+	AMessage_st s_Message_Rx;
+	s_Message_Rx.Dest_ID_a8 = NTP;
+	s_Message_Rx.Src_ID_u8 = CONSOLE;
+	s_Message_Rx.payload_p8 = (uint8_t*) Callback_buffer;
+	s_Message_Rx.payload_size = 0;
+	s_Message_Rx.ucMessageID_u16 = 0;
+	strcpy((char*)s_Message_Rx.cmdFun_a8,"EVENT");
+	strcpy((char*)s_Message_Rx.dest_Actor_a8,"NTP");
+	strcpy((char*)s_Message_Rx.src_Actor_a8,"CONSOLE");
+	i2c_dev_t *dev = pcf8563_get_device_handle();
+    ntp_initialized = true;
+    uint64_t initial_rtc_ms = 0;
+    uint64_t espMs;
+    struct timeval new_tv;
+       if (get_stable_rtc_time_ms(dev, &initial_rtc_ms) == ESP_OK) {
+           struct timeval tv_seed = {
+               .tv_sec  = initial_rtc_ms / 1000,
+               .tv_usec = (initial_rtc_ms % 1000) * 1000
+           };
+           settimeofday(&tv_seed, NULL);
+       } else {
+           // handle error: external RTC read failed
+           printf("Failed to seed time from PCF8563\n");
+       }
+    record_boot_time_base();
+
+    while (true) {
+        int poll_interval_s = (sync_cycle_count < INITIAL_SYNC_CYCLES)
+                           ? INITIAL_POLL_INTERVAL_S
+                           : ntp_Para.sync_interval;
+
+        ntp_sample_t samples[NTP_QUERY_COUNT] = {0};
+        collect_ntp_samples(samples, NTP_QUERY_COUNT);
+        cJSON *root = cJSON_CreateObject();
+        struct timeval currentTime;
+        struct timeval extRTCTime;
+        uint64_t rtcMs = 0;
+        get_stable_rtc_time_ms(dev, &rtcMs);
+		RTC_Epoch = rtcMs;
+		epoch_us_to_timeval(rtcMs*1000,&extRTCTime);
+//        settimeofday(&extRTCTime, NULL);
+
+        int64_t best_offset_us = 0, best_rtt_us = 0;
+        bool sync_success = select_best_sample(samples, NTP_QUERY_COUNT, &best_offset_us, &best_rtt_us);
+
+        double mean_rtt = 0, std_rtt = 0;
+        if (sync_success && is_offset_valid(best_offset_us))
+        {
+//            calculate_stats(samples, NTP_QUERY_COUNT, &mean_rtt, &std_rtt);
+            gettimeofday(&currentTime, NULL);
+//            uint64_t espMs = (uint64_t)currentTime.tv_sec * 1000 + currentTime.tv_usec / 1000;
+//    		ESP_RTC=espMs;
+
+            // ==== Insert system‐clock update here ====
+            new_tv = currentTime;
+            new_tv.tv_sec  += best_offset_us / 1000000;
+            new_tv.tv_usec += best_offset_us % 1000000;
+            if (new_tv.tv_usec >= 1000000) {
+            	new_tv.tv_sec  += 1;
+            	new_tv.tv_usec -= 1000000;
+              } else if (new_tv.tv_usec < 0) {
+            	  new_tv.tv_sec  -= 1;
+            	  new_tv.tv_usec += 1000000;
+              }
+            settimeofday(&new_tv, NULL);
+            // =========================================
+            // Now push same UTC into external PCF8563
+            struct tm tm_utc;
+            gmtime_r(&new_tv.tv_sec, &tm_utc);
+            tm_utc.tm_year += 1900;
+            tm_utc.tm_wday = epoch_to_wday_plain(new_tv.tv_sec);
+            uint8_t cs = new_tv.tv_usec / 10000;
+            // Handle rare case where rounding pushes you to exactly 100cs:
+            if (cs >= 100) {
+                cs = 0;
+                // carry into the next whole second
+                new_tv.tv_sec++;
+                gmtime_r(&new_tv.tv_sec, &tm_utc);
+                tm_utc.tm_year += 1900;
+            }
+            pcf8563_set_time_ms(dev, &tm_utc, cs);
+			get_current_rtc_time_ms(1);
+
+//           gettimeofday(&new_tv, NULL);
+//            printf("Int RTC - Seconds %ld.%06ld, Centiseconds %ld  ", (uint32_t)new_tv.tv_sec, (uint32_t)new_tv.tv_usec, (uint32_t)new_tv.tv_usec/10000);
+//            uint64_t rtcMs = 0;
+//            get_stable_rtc_time_ms(dev, &rtcMs);
+//            printf("Ext RTC - milliSeconds %lld, Centiseconds %d\n", (uint64_t)rtcMs, cs);
+
+			 cJSON_AddNumberToObject(root, "BEST RTT(uS)", best_rtt_us);
+				        cJSON_AddNumberToObject(root, "BEST OFFSET(uS)", best_offset_us);
+						cJSON_AddBoolToObject(root, "ADJUSTMENT APPLIED", true);
+            // Update drift estimate
+            if (last_offset_us != 0) {
+                int64_t drift = best_offset_us - last_offset_us;
+                avg_drift_us_per_s = (avg_drift_us_per_s * 3 + drift / poll_interval_s) / 4;
+                if (llabs(avg_drift_us_per_s) > 10) {
+                    sync_cycle_count = 0;
+                }
+            }
+            last_offset_us = best_offset_us;
+        } else {
+            // on failure or invalid offset, retry quickly
+            poll_interval_s = 1;
+			  cJSON_AddNumberToObject(root, "BEST RTT(uS)", -1);
+	            cJSON_AddNumberToObject(root, "BEST OFFSET(uS)", -1);
+	    		cJSON_AddBoolToObject(root, "ADJUSTMENT APPLIED", false);
+        }
+        get_stable_rtc_time_ms(dev, &rtcMs);
+     		RTC_Epoch = rtcMs;
+
+             gettimeofday(&currentTime, NULL);
+              espMs = (uint64_t)currentTime.tv_sec * 1000 + currentTime.tv_usec / 1000;
+     		ESP_RTC=espMs;
+        cJSON_AddNumberToObject(root, "RTC_EPOC(mS)", RTC_Epoch);
+        		cJSON_AddNumberToObject(root, "NTP_EPOC(mS)", ESP_RTC);
+        		int64_t difference = (RTC_Epoch - ESP_RTC);
+        		cJSON_AddNumberToObject(root, "DIFFERENCE(mS)", difference);
+		 cJSON_AddNumberToObject(root, "CALCULATED OFFSET (uS)", offs);
+	        cJSON_AddNumberToObject(root, "CALCULATED RTT(uS)", rtt);
+		memset(payLoadData_NTP,0,sizeof(payLoadData_NTP));
+		cJSON_PrintPreallocated(root, payLoadData_NTP, sizeof(payLoadData_NTP), false);
+		strcpy((char*)s_Message_Rx.payload_p8, payLoadData_NTP);
+		cJSON_Delete(root);
+		console_send_responce_to_console_xface(&s_Message_Rx);
+        sync_cycle_count++;
+        vTaskDelay(pdMS_TO_TICKS(poll_interval_s * 1000));
+    }
+}
+
+
+//
+//
+//// Configuration
+//#define NTP_SERVERS {"pool.ntp.org", "north-america.pool.ntp.org", "time.google.com"}
+//#define NTP_QUERY_COUNT 5         // Number of queries per sync cycle
+//#define INITIAL_POLL_INTERVAL_S 5 // Initial sync interval (seconds)
+//#define STEADY_POLL_INTERVAL_S 60 // Steady-state sync interval (seconds)
+//#define INITIAL_SYNC_CYCLES 3     // Number of fast initial sync cycles
+//#define RTT_OUTLIER_THRESHOLD 2.0 // Discard RTTs > mean + 2*std_dev
+//#define MAX_RTT_MS 5000           // Ignore samples with RTT > 5s
+//#define TASK_PRIORITY (tskIDLE_PRIORITY + 5) // High-priority task
+//
+//// Structure to hold NTP sample data
+//typedef struct {
+//    int64_t offset_us; // Clock offset in microseconds
+//    int64_t rtt_us;    // Approximate round-trip time in microseconds
+//    bool valid;        // Sample validity
+//} ntp_sample_t;
+//
+//// Global variables
+//static volatile bool ntp_initialized = false;
+//static int64_t last_offset_us = 0;
+//static int64_t avg_drift_us_per_s = 0;
+//static int sync_cycle_count = 0;
+//
+//// Function to calculate mean and standard deviation of RTTs
+//static void calculate_stats(ntp_sample_t *samples, int count, float *mean_rtt, float *std_dev_rtt)
+//{
+//    float sum = 0;
+//    int valid_count = 0;
+//
+//    // Calculate mean
+//    for (int i = 0; i < count; i++) {
+//        if (samples[i].valid) {
+//            sum += samples[i].rtt_us;
+//            valid_count++;
+//        }
+//    }
+//    *mean_rtt = valid_count > 0 ? sum / valid_count : 0;
+//
+//    // Calculate standard deviation
+//    float variance = 0;
+//    for (int i = 0; i < count; i++) {
+//        if (samples[i].valid) {
+//            float diff = samples[i].rtt_us - *mean_rtt;
+//            variance += diff * diff;
+//        }
+//    }
+//    *std_dev_rtt = valid_count > 1 ? sqrt(variance / (valid_count - 1)) : 0;
+//}
+//
+//// Function to collect and process NTP samples
+//static void collect_ntp_samples(ntp_sample_t *samples, int count)
+//{
+//    for (int i = 0; i < count; i++) {
+//        samples[i].valid = false;
+//
+//        // Get time before query (T1)
+//        struct timeval tv_before;
+//        gettimeofday(&tv_before, NULL);
+//        int64_t t1_us = tv_before.tv_sec * 1000000LL + tv_before.tv_usec;
+//
+//        // Ensure SNTP is ready
+//
+//        sntp_sync_status_t status = esp_sntp_get_sync_status();
+//        if (status != SNTP_SYNC_STATUS_COMPLETED) {
+//        //	printf("NTP query %d: Previous sync incomplete, waiting \n", i + 1);
+//            vTaskDelay(pdMS_TO_TICKS(1000));
+//            continue;
+//        }
+//
+//        // Trigger NTP sync
+//        esp_sntp_init(); // Re-init to force a new query
+//
+//        // Wait for sync to complete
+//        int retry = 0;
+//        const int retry_count = 10; // 1 second timeout
+//        while (status != SNTP_SYNC_STATUS_COMPLETED && retry < retry_count) {
+//            vTaskDelay(pdMS_TO_TICKS(1000));
+//            retry++;
+//        }
+//
+//        if (retry >= retry_count) {
+////        	printf("%d Timeout waiting for sync \n", i + 1);
+//            esp_sntp_stop();
+//            continue;
+//        }
+//
+//        // Get time after sync (T4)
+//
+//        struct timeval tv_after;
+//        gettimeofday(&tv_after, NULL);
+//        int64_t t4_us = tv_after.tv_sec * 1000000LL + tv_after.tv_usec;
+//
+//        // Approximate RTT: T4 - T1 (includes client-side delays)
+//        int64_t rtt_us = t4_us - t1_us;
+//
+//        if (rtt_us > MAX_RTT_MS * 1000 || rtt_us < 0) {
+////        	printf("NTP query %d: Invalid RTT %lld us, discarding \n", i + 1, rtt_us);
+//            esp_sntp_stop();
+//            continue;
+//        }
+//
+//        // Estimate offset: Difference between post-sync and pre-sync time
+//        // SNTP applies the offset internally, so we observe the clock adjustment
+//        int64_t offset_us = ((tv_after.tv_sec - tv_before.tv_sec) * 1000000LL) +
+//                            (tv_after.tv_usec - tv_before.tv_usec);
+//
+//        samples[i].offset_us = offset_us;
+//        samples[i].rtt_us = rtt_us;
+//        samples[i].valid = true;
+//
+////        printf("NTP query %d: Offset=%lld us, RTT=%lld us \n", i + 1, offset_us, rtt_us);
+//
+//        // Stop SNTP to prepare for next query
+//        esp_sntp_stop();
+//
+//        // Short delay between queries to avoid server overload
+//        vTaskDelay(pdMS_TO_TICKS(1000));
+//    }
+//}
+//
+//// Function to select the best NTP sample
+//static bool select_best_sample(ntp_sample_t *samples, int count, int64_t *best_offset_us, int64_t *best_rtt_us)
+//{
+//    // Calculate RTT statistics
+//    float mean_rtt, std_dev_rtt;
+//    calculate_stats(samples, count, &mean_rtt, &std_dev_rtt);
+//
+//    // Find sample with minimum RTT that is not an outlier
+//    int64_t min_rtt_us = INT64_MAX;
+//    int best_idx = -1;
+//
+//    for (int i = 0; i < count; i++) {
+//        if (!samples[i].valid) continue;
+//
+//        // Reject outliers based on RTT
+//        if (samples[i].rtt_us > mean_rtt + RTT_OUTLIER_THRESHOLD * std_dev_rtt) {
+//        	printf("Sample %d: RTT %lld us is outlier, discarding \n", i + 1, samples[i].rtt_us);
+//            continue;
+//        }
+//
+//        if (samples[i].rtt_us < min_rtt_us) {
+//            min_rtt_us = samples[i].rtt_us;
+//            best_idx = i;
+//        }
+//    }
+//
+//    if (best_idx == -1) {
+//    	//printf("No valid NTP samples after filtering \n");
+//        return false;
+//    }
+//
+//    *best_offset_us = samples[best_idx].offset_us;
+//    *best_rtt_us = samples[best_idx].rtt_us;
+//    return true;
+//}
+//
+//// NTP sync task
+//static void NTP_Sync_Check(void *pvParameters)
+//{
+//	struct timeval currentTime;
+//	int64_t RTC_Epoch = 0, ESP_RTC = 0;
+//	int milliseconds = 0, RTC_milliseconds = 0;
+//	struct timeval delta = {0};
+//	struct tm timeinfo;
+//	struct tm RTC_time = {0};
+//	uint8_t timems = 0;
+//	time_t tOfDay = 0;
+//	sntp_sync_status_t sync_status = SNTP_SYNC_STATUS_RESET;
+//	AMessage_st s_Message_Rx;
+//	s_Message_Rx.Dest_ID_a8 = NTP;
+//	s_Message_Rx.Src_ID_u8 = CONSOLE;
+//	s_Message_Rx.payload_p8 = (uint8_t*) Callback_buffer;
+//	s_Message_Rx.payload_size = 0;
+//	s_Message_Rx.ucMessageID_u16 = 0;
+//	strcpy((char*)s_Message_Rx.cmdFun_a8,"EVENT");
+//	strcpy((char*)s_Message_Rx.dest_Actor_a8,"NTP");
+//	strcpy((char*)s_Message_Rx.src_Actor_a8,"CONSOLE");
+//	i2c_dev_t *dev = pcf8563_get_device_handle();
+//
+//    // Initialize SNTP
+//    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+//    esp_sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH); // Enable slewing
+//    ntp_Para.RTC_Status = RTC_SMOOTH_MODE;    // RTC change reason is NTP immediate mode
+//    const char *servers[] = NTP_SERVERS;
+//    static int current_server_idx = 0;
+//    for (int i = 0; i < sizeof(servers) / sizeof(servers[0]); i++) {
+//        esp_sntp_setservername(i, servers[i]);
+//    }
+//    esp_sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+//    esp_sntp_init();
+//    ntp_initialized = true;
+//
+//    // Main sync loop
+//    while (true) {
+//        // Determine polling interval
+//        int poll_interval_s = (sync_cycle_count < INITIAL_SYNC_CYCLES) ?
+//                             INITIAL_POLL_INTERVAL_S : STEADY_POLL_INTERVAL_S;
+//
+//        // Collect NTP samples
+//        ntp_sample_t samples[NTP_QUERY_COUNT];
+//        collect_ntp_samples(samples, NTP_QUERY_COUNT);
+//
+//		if (pcf8563_get_time_ms(dev, &RTC_time, &timems) == ESP_OK) {
+//			RTC_time.tm_year-=1900;
+//			tOfDay = mktime(&RTC_time);
+//		}
+//		RTC_milliseconds = timems * 10;
+//		RTC_Epoch = (tOfDay * 1000) + RTC_milliseconds;
+//
+//		gettimeofday(&currentTime, NULL);
+//		ESP_RTC =  ((uint64_t)currentTime.tv_sec * 1000) + (currentTime.tv_usec / 1000);
+//
+//		cJSON *root = cJSON_CreateObject();
+//		cJSON_AddNumberToObject(root, "RTC_EPOC", RTC_Epoch);
+//		cJSON_AddNumberToObject(root, "SMOOTH MODE", ESP_RTC);
+//		cJSON_AddNumberToObject(root, "DIFFERENCE", llabs(RTC_Epoch - ESP_RTC));
+//        // Select best sample
+//        int64_t best_offset_us, best_rtt_us;
+//        if (select_best_sample(samples, NTP_QUERY_COUNT, &best_offset_us, &best_rtt_us)) {
+//            // Estimate error (half RTT, conservative due to approximation)
+//            int64_t error_bound_us = best_rtt_us / 2;
+////            printf("Selected: Offset=%lld us, RTT=%lld us, Error bound=±%lld us \n",
+////                     best_offset_us, best_rtt_us, error_bound_us);
+//
+//            // TODO: Update external RTC with synchronized time
+//	//	    	printf("Start difference between esp rtc and external rtc = %lld \n", llabs(ESP_RTC -RTC_Epoch));
+//
+////             1. Get current system time after NTP sync
+//                gettimeofday(&currentTime, NULL);
+//                int milliseconds = (currentTime.tv_usec / 1000);
+//                // 2. Convert to broken-down time (if needed by RTC)
+//                gmtime_r(&currentTime.tv_sec, &timeinfo);  // convert epoch sec to sec,min,hr,day,month,year format
+//				timeinfo.tm_year = timeinfo.tm_year + 1900 ;
+//	            // 3. Write to external RTC
+//				pcf8563_set_time_ms(dev, &timeinfo, (milliseconds/10));
+//				// Send response to the console
+//
+//				cJSON_AddBoolToObject(root, "ADJUSTMENT APPLIED", true);
+//
+//            //    time_t now = tv_now.tv_sec;
+//            //    struct tm *tm_info = gmtime(&now); // Use gmtime for UTC
+//            // 3. Write to external RTC (e.g., DS3231 via I2C)
+//            //    - Initialize I2C driver if not already done (e.g., i2c_master_init())
+//            //    - Use RTC driver or I2C commands to set time
+//            //    Example for DS3231:
+//            //    - Write registers 0x00-0x06 (seconds, minutes, hours, day, date, month, year)
+//            //    - Format: BCD, e.g., tm_info->tm_sec -> (tm_info->tm_sec % 10) | ((tm_info->tm_sec / 10) << 4)
+//            //    - Handle I2C errors and log failures
+//            //    Pseudo-code:
+//            //    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+//            //    i2c_master_start(cmd);
+//            //    i2c_master_write_byte(cmd, (DS3231_ADDR << 1) | I2C_MASTER_WRITE, true);
+//            //    i2c_master_write_byte(cmd, 0x00, true); // Start at seconds register
+//            //    i2c_master_write_byte(cmd, dec_to_bcd(tm_info->tm_sec), true);
+//            //    i2c_master_write_byte(cmd, dec_to_bcd(tm_info->tm_min), true);
+//            //    i2c_master_write_byte(cmd, dec_to_bcd(tm_info->tm_hour), true);
+//            //    ...
+//            //    i2c_master_stop(cmd);
+//            //    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(1000));
+//            //    i2c_cmd_link_delete(cmd);
+//            //    if (ret != ESP_OK) {
+//            //        printf("Failed to update external RTC");
+//            //    }
+//            // 4. Only update if sync is valid to avoid unnecessary writes
+//
+//            // Update drift estimate (simple moving average)
+//            if (last_offset_us != 0) {
+//                int64_t interval_us = poll_interval_s * 1000000LL;
+//                int64_t drift_us = best_offset_us - last_offset_us;
+//                avg_drift_us_per_s = (avg_drift_us_per_s * 3 + drift_us / poll_interval_s) / 4;
+////                printf("Estimated drift: %lld us/s \n", avg_drift_us_per_s);
+//            }
+//            last_offset_us = best_offset_us;
+//
+//            // Adjust polling interval if drift is high
+//            if (llabs(avg_drift_us_per_s) > 10) { // >10 us/s (~1 ms/min)
+////            	printf("High drift detected, reducing poll interval \n");
+//                sync_cycle_count = 0; // Trigger fast polling
+//            }
+//        } else {
+//    		cJSON_AddBoolToObject(root, "ADJUSTMENT APPLIED", false);
+////        	printf("Sync failed, trying next server \n");
+//            current_server_idx = (current_server_idx + 1) % (sizeof(servers) / sizeof(servers[0]));
+//            esp_sntp_stop();
+//            esp_sntp_setservername(0, servers[current_server_idx]);
+//            esp_sntp_init();
+//        }
+//
+//		memset(payLoadData_NTP,0,sizeof(payLoadData_NTP));
+//		cJSON_PrintPreallocated(root, payLoadData_NTP, sizeof(payLoadData_NTP), false);
+//		strcpy((char*)s_Message_Rx.payload_p8, payLoadData_NTP);
+//		cJSON_Delete(root);
+//		console_send_responce_to_console_xface(&s_Message_Rx);
+//        sync_cycle_count++;
+//        vTaskDelay(pdMS_TO_TICKS(poll_interval_s * 1000));
+//    }
+//}
+
+
+
+
+
+//// Structure to hold NTP sample data
+//typedef struct {
+//    int64_t offset_us; // Clock offset in microseconds
+//    int64_t rtt_us;    // Round-trip time in microseconds
+//    bool valid;        // Sample validity
+//} ntp_sample_t;
+//
+//// Global variables
+//static volatile bool ntp_initialized = false;
+//static int64_t last_offset_us = 0;
+//static int64_t avg_drift_us_per_s = 0;
+//static int sync_cycle_count = 0;
+
+//// Convert NTP timestamp to microseconds since epoch
+//static int64_t ntp_to_us(uint64_t ntp_time)
+//{
+//    uint64_t secs = ntp_time >> 32; // Seconds since 1900
+//    uint64_t frac = ntp_time & 0xFFFFFFFF; // Fractional seconds
+//    secs -= 2208988800ULL; // Convert from 1900 to 1970 epoch
+//    int64_t us = secs * 1000000LL + (frac * 1000000LL) / 0x100000000LL;
+//    return us;
+//}
+//
+//// Function to calculate mean and standard deviation of RTTs
+//static void calculate_stats(ntp_sample_t *samples, int count, float *mean_rtt, float *std_dev_rtt)
+//{
+//    float sum = 0;
+//    int valid_count = 0;
+//
+//    // Calculate mean
+//    for (int i = 0; i < count; i++) {
+//        if (samples[i].valid) {
+//            sum += samples[i].rtt_us;
+//            valid_count++;
+//        }
+//    }
+//    *mean_rtt = valid_count > 0 ? sum / valid_count : 0;
+//
+//    // Calculate standard deviation
+//    float variance = 0;
+//    for (int i = 0; i < count; i++) {
+//        if (samples[i].valid) {
+//            float diff = samples[i].rtt_us - *mean_rtt;
+//            variance += diff * diff;
+//        }
+//    }
+//    *std_dev_rtt = valid_count > 1 ? sqrt(variance / (valid_count - 1)) : 0;
+//}
+//
+//
+//// Function to collect and process NTP samples
+////static void collect_ntp_samples(ntp_sample_t *samples, int count)
+////{
+////    for (int i = 0; i < count; i++) {
+////        samples[i].valid = false;
+////
+////        // Get current time before query
+////        struct timeval tv_before;
+////        gettimeofday(&tv_before, NULL);
+////        int64_t t1_us = tv_before.tv_sec * 1000000LL + tv_before.tv_usec;
+////
+////        // Trigger NTP query
+////        sntp_sync_status_t status = esp_sntp_get_sync_status();
+////        if (status != SNTP_SYNC_STATUS_COMPLETED) {
+////            printf( "NTP query %d: Previous sync incomplete, retrying \n", i + 1);
+////            vTaskDelay(pdMS_TO_TICKS(1000)); // Wait before retry
+////            continue;
+////        }
+////
+////        // Wait for sync to complete
+////        int retry = 0;
+////        const int retry_count = 10;
+////        while (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_IN_PROGRESS && retry < retry_count) {
+////            vTaskDelay(pdMS_TO_TICKS(100));
+////            retry++;
+////        }
+////
+////        if (retry >= retry_count) {
+////        	 printf("NTP query %d: Timeout waiting for sync \n", i + 1);
+////            continue;
+////        }
+////
+////        // Get sync result
+////        int64_t offset_us = sntp_get_time_sync_result();
+////        struct timeval tv_after;
+////        gettimeofday(&tv_after, NULL);
+////        int64_t t4_us = tv_after.tv_sec * 1000000LL + tv_after.tv_usec;
+////
+////        // Estimate RTT (simplified, actual RTT from server if available)
+////        int64_t rtt_us = t4_us - t1_us;
+////
+////        if (rtt_us > MAX_RTT_MS * 1000 || rtt_us < 0) {
+////        	 printf( "NTP query %d: Invalid RTT %lld us, discarding \n", i + 1, rtt_us);
+////            continue;
+////        }
+////
+////        samples[i].offset_us = offset_us;
+////        samples[i].rtt_us = rtt_us;
+////        samples[i].valid = true;
+////
+////        printf("NTP query %d: Offset=%lld us, RTT=%lld us \n", i + 1, offset_us, rtt_us);
+////
+////        // Short delay between queries to avoid server overload
+////        vTaskDelay(pdMS_TO_TICKS(1000));
+////    }
+////}
+//
+//// Function to send and receive NTP packet
+//static bool query_ntp_server(const char *server, ntp_sample_t *sample)
+//{
+//    sample->valid = false;
+//
+//    // Create UDP socket
+//    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+//    if (sock < 0) {
+//        printf("Failed to create socket");
+//        return false;
+//    }
+//
+//    // Set timeout
+//    struct timeval timeout = {.tv_sec = 2, .tv_usec = 0};
+//    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+//
+//    // Resolve server address
+//    struct sockaddr_in dest_addr = {0};
+//    dest_addr.sin_family = AF_INET;
+//    dest_addr.sin_port = htons(NTP_PORT);
+//    if (inet_pton(AF_INET, server, &dest_addr.sin_addr) <= 0) {
+//        struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_DGRAM};
+//        struct addrinfo *res;
+//        if (getaddrinfo(server, "123", &hints, &res) != 0) {
+//            printf("Failed to resolve %s", server);
+//            close(sock);
+//            return false;
+//        }
+//        memcpy(&dest_addr, res->ai_addr, sizeof(dest_addr));
+//        freeaddrinfo(res);
+//    }
+//
+//    // Prepare NTP packet
+//    ntp_packet_t packet = {0};
+//    packet.li_vn_mode = (0 << 6) | (4 << 3) | 3; // LI=0, VN=4, Mode=3 (client)
+//
+//    // Get T1 (client send time)
+//    struct timeval tv_t1;
+//    gettimeofday(&tv_t1, NULL);
+//    int64_t t1_us = tv_t1.tv_sec * 1000000LL + tv_t1.tv_usec;
+//    uint64_t ntp_t1 = ((tv_t1.tv_sec + 2208988800ULL) << 32) |
+//                      ((tv_t1.tv_usec * 0x100000000LL) / 1000000LL);
+// /
+//
+//    // Send NTP request
+//    if (sendto(sock, &packet, sizeof(packet), 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr)) < 0) {
+//        printf("Failed to send NTP request");
+//        close(sock);
+//        return false;
+//    }
+//
+//    // Receive response
+//    ntp_packet_t response = {0};
+//    struct sockaddr_in from_addr;
+//    socklen_t from_len = sizeof(from_addr);
+//    int len = recvfrom(sock, &response, sizeof(response), 0, (struct sockaddr *)&from_addr, &from_len);
+//    if (len < sizeof(response)) {
+//        printf("Failed to receive NTP response");
+//        close(sock);
+//        return false;
+//    }
+//
+//    // Get T4 (client receive time)
+//    struct timeval tv_t4;
+//    gettimeofday(&tv_t4, NULL);
+//    int64_t t4_us = tv_t4.tv_sec * 1000000LL + tv_t4.tv_usec;
+//
+//    // Convert timestamps
+//    response.origin_time = ntohl(response.origin_time >> 32) | (ntohl(response.origin_time & 0xFFFFFFFF) << 32);
+//    response.recv_time = ntohl(response.recv_time >> 32) | (ntohl(response.recv_time & 0xFFFFFFFF) << 32);
+//    response.xmit_time = ntohl(response.xmit_time >> 32) | (ntohl(response.xmit_time & 0xFFFFFFFF) << 32);
+//
+//    int64_t t2_us = ntp_to_us(response.recv_time); // T2: Server receive time
+//    int64_t t3_us = ntp_to_us(response.xmit_time); // T3: Server transmit time
+//
+//    // Calculate RTT: δ = (T4 - T1) - (T3 - T2)
+//    int64_t rtt_us = (t4_us - t1_us) - (t3_us - t2_us);
+//    if (rtt_us > MAX_RTT_MS * 1000 || rtt_us < 0) {
+//        printf( "Invalid RTT %lld us, discarding", rtt_us);
+//        close(sock);
+//        return false;
+//    }
+//
+//    // Calculate offset: Θ = ½[(T2 - T1) + (T3 - T4)]
+//    int64_t offset_us = ((t2_us - t1_us) + (t3_us - t4_us)) / 2;
+//
+//    sample->offset_us = offset_us;
+//    sample->rtt_us = rtt_us;
+//    sample->valid = true;
+//
+//    close(sock);
+//    return true;
+//}
+//// Function to collect and process NTP samples
+//// Function to collect and process NTP samples
+//static void collect_ntp_samples(ntp_sample_t *samples, int count)
+//{
+//    const char *servers[] = NTP_SERVERS;
+//    int server_count = sizeof(servers) / sizeof(servers[0]);
+//
+//    for (int i = 0; i < count; i++) {
+//        const char *server = servers[current_server_idx % server_count];
+//        if (query_ntp_server(server, &samples[i])) {
+//            printf("NTP query %d (%s): Offset=%lld us, RTT=%lld us",
+//                     i + 1, server, samples[i].offset_us, samples[i].rtt_us);
+//        } else {
+//            printf( "NTP query %d (%s): Failed", i + 1, server);
+//            current_server_idx++; // Try next server on failure
+//        }
+//        vTaskDelay(pdMS_TO_TICKS(1000)); // Delay between queries
+//    }
+//}
+//
+////static void collect_ntp_samples(ntp_sample_t *samples, int count)
+////{
+////    for (int i = 0; i < count; i++) {
+////        samples[i].valid = false;
+////
+////        // Get time before query
+////        struct timeval tv_before;
+////        gettimeofday(&tv_before, NULL);
+////        int64_t t1_us = tv_before.tv_sec * 1000000LL + tv_before.tv_usec;
+////
+////        // Ensure SNTP is ready
+////        if (esp_sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED) {
+////        	printf("NTP query %d: Previous sync incomplete, waiting \n", i + 1);
+////            vTaskDelay(pdMS_TO_TICKS(1000));
+////        }
+////
+////        // Trigger NTP sync
+////        esp_sntp_init(); // Re-init to force a new query
+////
+////        // Wait for sync to complete
+////        int retry = 0;
+////        const int retry_count = 10; // 1 second timeout
+////        while (esp_sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED && retry < retry_count) {
+////            vTaskDelay(pdMS_TO_TICKS(100));
+////            retry++;
+////        }
+////
+////        if (retry >= retry_count) {
+////        	printf("NTP query %d: Timeout waiting for sync \n", i + 1);
+////            esp_sntp_stop();
+////            continue;
+////        }
+////
+////        // Get time after sync
+////        struct timeval tv_after;
+////        gettimeofday(&tv_after, NULL);
+////        int64_t t4_us = tv_after.tv_sec * 1000000LL + tv_after.tv_usec;
+////
+////        // Calculate approximate RTT
+////        int64_t rtt_us = t4_us - t1_us;
+////
+////        if (rtt_us > MAX_RTT_MS * 1000 || rtt_us < 0) {
+////            printf("NTP query %d: Invalid RTT %lld us, discarding \n", i + 1, rtt_us);
+////            esp_sntp_stop();
+////            continue;
+////        }
+////
+////        // Calculate offset (difference between pre-sync and post-sync time)
+////        int64_t offset_us = ((tv_after.tv_sec - tv_before.tv_sec) * 1000000LL) +
+////                            (tv_after.tv_usec - tv_before.tv_usec);
+////
+////        samples[i].offset_us = offset_us;
+////        samples[i].rtt_us = rtt_us;
+////        samples[i].valid = true;
+////
+////        printf("NTP query %d: Offset=%lld us, RTT=%lld us \n", i + 1, offset_us, rtt_us);
+////
+////        // Short delay between queries to avoid server overload
+////        esp_sntp_stop();
+////        vTaskDelay(pdMS_TO_TICKS(1000));
+////    }
+////}
+//// Function to select the best NTP sample
+//static bool select_best_sample(ntp_sample_t *samples, int count, int64_t *best_offset_us, int64_t *best_rtt_us)
+//{
+//    // Calculate RTT statistics
+//    float mean_rtt, std_dev_rtt;
+//    calculate_stats(samples, count, &mean_rtt, &std_dev_rtt);
+//
+//    // Find sample with minimum RTT that is not an outlier
+//    int64_t min_rtt_us = INT64_MAX;
+//    int best_idx = -1;
+//
+//    for (int i = 0; i < count; i++) {
+//        if (!samples[i].valid) continue;
+//
+//        // Reject outliers based on RTT
+//        if (samples[i].rtt_us > mean_rtt + RTT_OUTLIER_THRESHOLD * std_dev_rtt) {
+//        	 printf("Sample %d: RTT %lld us is outlier, discarding \n", i + 1, samples[i].rtt_us);
+//            continue;
+//        }
+//
+//        if (samples[i].rtt_us < min_rtt_us) {
+//            min_rtt_us = samples[i].rtt_us;
+//            best_idx = i;
+//        }
+//    }
+//
+//    if (best_idx == -1) {
+//    	 printf("No valid NTP samples after filtering \n");
+//        return false;
+//    }
+//
+//    *best_offset_us = samples[best_idx].offset_us;
+//    *best_rtt_us = samples[best_idx].rtt_us;
+//    return true;
+//}
+// NTP sync task
+//static void NTP_Sync_Check(void *pvParameters __attribute__((unused)))
+//{
+//    // Initialize SNTP
+//    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
+//    esp_sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH); // Enable slewing
+//    const char *servers[] = NTP_SERVERS;
+//    for (int i = 0; i < sizeof(servers) / sizeof(servers[0]); i++) {
+//        esp_sntp_setservername(i, servers[i]);
+//    }
+//    esp_sntp_set_time_sync_notification_cb(time_sync_notification_cb);
+//    esp_sntp_init();
+//    ntp_initialized = true;
+//
+//    // Main sync loop
+//    while (true) {
+//        // Determine polling interval
+//        int poll_interval_s = (sync_cycle_count < INITIAL_SYNC_CYCLES) ?
+//                             INITIAL_POLL_INTERVAL_S : STEADY_POLL_INTERVAL_S;
+//
+//        // Collect NTP samples
+//        ntp_sample_t samples[NTP_QUERY_COUNT];
+//        collect_ntp_samples(samples, NTP_QUERY_COUNT);
+//
+//        // Select best sample
+//        int64_t best_offset_us, best_rtt_us;
+//        if (select_best_sample(samples, NTP_QUERY_COUNT, &best_offset_us, &best_rtt_us)) {
+//            // Estimate error (half RTT)
+//            int64_t error_bound_us = best_rtt_us / 2;
+//            printf( "Selected: Offset=%lld us, RTT=%lld us, Error bound=±%lld us \n",
+//                     best_offset_us, best_rtt_us, error_bound_us);
+//
+//            // Update drift estimate (simple moving average)
+//            if (last_offset_us != 0) {
+//                int64_t interval_us = poll_interval_s * 1000000LL;
+//                int64_t drift_us = best_offset_us - last_offset_us;
+//                avg_drift_us_per_s = (avg_drift_us_per_s * 3 + drift_us / poll_interval_s) / 4;
+//                printf("Estimated drift: %lld us/s \n", avg_drift_us_per_s);
+//            }
+//            last_offset_us = best_offset_us;
+//
+//            // Adjust polling interval if drift is high
+//            if (llabs(avg_drift_us_per_s) > 10) { // >10 us/s (~1 ms/min)
+//                printf("High drift detected, reducing poll interval \n");
+//                sync_cycle_count = 0; // Trigger fast polling
+//            }
+//        } else {
+//        	printf("Sync failed, retrying with next server \n");
+//            esp_sntp_restart(); // Try different server
+//        }
+//
+//        sync_cycle_count++;
+//        vTaskDelay(pdMS_TO_TICKS(poll_interval_s * 1000));
+//    }
+//}
+
+//static void NTP_Sync_Check(void *pvParameters __attribute__((unused)))
+//{
+//	struct timeval currentTime;
+////	static bool change_mode_flag = false;
+//    int64_t RTC_Epoch = 0, ESP_RTC = 0;
+//	int milliseconds = 0, RTC_milliseconds = 0;
+//	struct timeval delta = {0};
+//	struct tm timeinfo;
+//	struct tm RTC_time = {0};
+//	uint8_t timems = 0;
+//	time_t tOfDay = 0;
+//	sntp_sync_status_t sync_status = SNTP_SYNC_STATUS_RESET;
+//	AMessage_st s_Message_Rx;
+//	s_Message_Rx.Dest_ID_a8 = NTP;
+//	s_Message_Rx.Src_ID_u8 = CONSOLE;
+//	s_Message_Rx.payload_p8 = (uint8_t*) Callback_buffer;
+//	s_Message_Rx.payload_size = 0;
+//	s_Message_Rx.ucMessageID_u16 = 0;
+//	strcpy((char*)s_Message_Rx.cmdFun_a8,"EVENT");
+//	strcpy((char*)s_Message_Rx.dest_Actor_a8,"NTP");
+//	strcpy((char*)s_Message_Rx.src_Actor_a8,"CONSOLE");
+//	i2c_dev_t *dev = pcf8563_get_device_handle();
+//
+//	while(1)
+//	{
+////		if((ntp_Para.NTP_Mode == SNTP_SYNC_MODE_SMOOTH) && (ntp_Para.sync_interval == 60000))
+////		{
+////			ntp_Para.sync_interval = 60 * 60 * 1000;   // change it to 60 mins
+////			sntp_set_sync_interval(ntp_Para.sync_interval);
+////		}
+//		sync_status = sntp_get_sync_status();
+//
+//
+////	        // ✅ Truly finished smooth adjustment
+////	    }
+//	    if((sync_status == SNTP_SYNC_STATUS_COMPLETED))
+//		{
+//			if (pcf8563_get_time_ms(dev, &RTC_time, &timems) == ESP_OK) {
+//				RTC_time.tm_year-=1900;
+//				tOfDay = mktime(&RTC_time);
+//			}
+//			RTC_milliseconds = timems * 10;
+//			RTC_Epoch = (tOfDay * 1000) + RTC_milliseconds;
+//		    gettimeofday(&currentTime, NULL);
+//		    ESP_RTC =  ((uint64_t)currentTime.tv_sec * 1000) + (currentTime.tv_usec / 1000);
+////	    	printf("Start difference between esp rtc and external rtc = %lld \n", llabs(ESP_RTC -RTC_Epoch));
+//			cJSON *root = cJSON_CreateObject();
+//			cJSON_AddNumberToObject(root, "RTC_EPOC", RTC_Epoch);
+//			if(sntp_get_sync_mode() == SNTP_SYNC_MODE_IMMED)
+//			{
+//				cJSON_AddNumberToObject(root, "IMMEDIATE MODE", ESP_RTC);
+//				cJSON_AddNumberToObject(root, "DIFFERENCE", llabs(RTC_Epoch - ESP_RTC));
+////				if((llabs(RTC_Epoch - ESP_RTC)) >= 2000)  // difference greater than or equal to 2 sec
+//				{
+//				    gettimeofday(&currentTime, NULL);
+//				    milliseconds = (currentTime.tv_usec / 1000);
+//					gmtime_r(&currentTime.tv_sec, &timeinfo);  // convert epoch sec to sec,min,hr,day,month,year format
+//					timeinfo.tm_year = timeinfo.tm_year + 1900 ;
+//					pcf8563_set_time_ms(dev, &timeinfo, (milliseconds/10));
+//					cJSON_AddBoolToObject(root, "ADJUSTMENT APPLIED", true);
+//					ntp_Para.RTC_Status = RTC_IMMEDIATE_MODE;  // RTC change reason is NTP smooth mode
+//				}
+////				else
+////				{
+////					cJSON_AddBoolToObject(root, "ADJUSTMENT APPLIED", false);
+////				}
+//
+//				// Set smooth mode
+////				sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
+////				ntp_Para.NTP_Mode = SNTP_SYNC_MODE_SMOOTH;
+//			}
+//			else    //NTP smooth mode
+//			{
+//			   // adjtime(NULL, &delta);
+//			   // if (delta.tv_sec == 0 && delta.tv_usec == 0)   //check smooth mode time adjustment is done or not
+//			    {
+////			    	if(Set_External_RTC == 1)
+//					{
+//			    		Set_External_RTC = 0;
+//						gettimeofday(&currentTime, NULL);
+//						milliseconds = (currentTime.tv_usec / 1000);
+//						gmtime_r(&currentTime.tv_sec, &timeinfo);  // convert epoch sec to sec,min,hr,day,month,year format
+//						timeinfo.tm_year = timeinfo.tm_year + 1900 ;
+//						pcf8563_set_time_ms(dev, &timeinfo, (milliseconds/10));
+//						ntp_Para.RTC_Status = RTC_SMOOTH_MODE;    // RTC change reason is NTP immediate mode
+//						cJSON_AddNumberToObject(root, "SMOOTH MODE", ESP_RTC);
+//						cJSON_AddNumberToObject(root, "DIFFERENCE", llabs(RTC_Epoch - ESP_RTC));
+//						cJSON_AddBoolToObject(root, "ADJUSTMENT APPLIED", true);
+//					}
+//			    }
+////			    else
+////			    {
+////			    	printf("not in sync \n");
+////			    }
+//			}
+//			memset(payLoadData_NTP,0,sizeof(payLoadData_NTP));
+//			cJSON_PrintPreallocated(root, payLoadData_NTP, sizeof(payLoadData_NTP), false);
+//			strcpy((char*)s_Message_Rx.payload_p8, payLoadData_NTP);
+//			cJSON_Delete(root);
+//			console_send_responce_to_console_xface(&s_Message_Rx);
+//			if (pcf8563_get_time_ms(dev, &RTC_time, &timems) == ESP_OK) {
+//				RTC_time.tm_year-=1900;
+//				tOfDay = mktime(&RTC_time);
+//			}
+//			RTC_milliseconds = timems * 10;
+//			RTC_Epoch = (tOfDay * 1000) + RTC_milliseconds;
+//		    gettimeofday(&currentTime, NULL);
+//		    ESP_RTC =  ((uint64_t)currentTime.tv_sec * 1000) + (currentTime.tv_usec / 1000);
+////			printf("End difference between esp rtc and external rtc = %lld \n\n", llabs(ESP_RTC -RTC_Epoch));
+//
+//		    }
+//		vTaskDelay(10000 / portTICK_PERIOD_MS);
+//	}
+//}
+#if 0
+void sntp_sync_time(struct timeval *tv)
+{
+    if (sntp_get_sync_mode() == SNTP_SYNC_MODE_IMMED) {
+        struct timeval tv_now;
+        gettimeofday(&tv_now, NULL);
+        int64_t cpu_time = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
+        int64_t sntp_time = (int64_t)tv->tv_sec * 1000000L + (int64_t)tv->tv_usec;
+        int64_t delta = sntp_time - cpu_time;
+//        printf("\n\n immediate sntp_time = %lld, cpu_time = %lld, delta = %lld ",sntp_time, cpu_time, delta);
+        if(llabs(delta) < 30000)
+        {
+//        	printf("\n immediate mode time is set");
+        	settimeofday(tv, NULL);
+        	sntp_set_sync_status(SNTP_SYNC_STATUS_COMPLETED);
+        }
+    } else if (sntp_get_sync_mode() == SNTP_SYNC_MODE_SMOOTH) {
+        struct timeval tv_now;
+        gettimeofday(&tv_now, NULL);
+        int64_t cpu_time = (int64_t)tv_now.tv_sec * 1000000L + (int64_t)tv_now.tv_usec;
+        int64_t sntp_time = (int64_t)tv->tv_sec * 1000000L + (int64_t)tv->tv_usec;
+        int64_t delta = sntp_time - cpu_time;
+//        printf("\n\n smooth sntp_time = %lld, cpu_time = %lld, delta = %lld ",sntp_time, cpu_time, delta);
+//        if(llabs(delta) < 30000)
+        {
+        	struct timeval tv_delta = { .tv_sec = delta / 1000000L, .tv_usec = delta % 1000000L };
+			if (adjtime(&tv_delta, NULL) == -1) {
+//				printf("Function adjtime don't update time because the error is very big \n");
+				settimeofday(tv, NULL);
+//				printf("Time was synchronized through settimeofday \n");
+				sntp_set_sync_status(SNTP_SYNC_STATUS_COMPLETED);
+			}
+	        else {
+	            sntp_set_sync_status(SNTP_SYNC_STATUS_IN_PROGRESS);
+	        }
+        }
+//        else {
+//            sntp_set_sync_status(SNTP_SYNC_STATUS_IN_PROGRESS);
+//        }
+    }
+//    if (time_sync_notification_cb) {
+//        time_sync_notification_cb(tv);
+//    }
+}
+#endif
+

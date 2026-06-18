@@ -1,0 +1,13 @@
+FS_ConfigNOR_BM_SPIFI_iMXRT1052_NXP_MIMXRT1050_EVK.c
+====================================================
+NOR flash: ISSI IS25WP064A
+IDE:       Embedded Studio V4.42 (Code > Code Generation > Optimization Level: Level 2 for speed)
+
+Start
+High-level format
+Writing 14 chunks of 524288 bytes.................OK
+Reading 14 chunks of 524288 bytes.................OK
+
+W Speed: 291.07 Kbyte/s
+R Speed: 8126.98 Kbyte/s
+Finished

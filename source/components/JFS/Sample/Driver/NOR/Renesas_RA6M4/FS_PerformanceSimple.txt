@@ -1,0 +1,20 @@
+FS_ConfigNOR_BM_SPIFI_R7FA6M4_Renesas_RA6M4_EK.c
+================================================
+FILE_SIZE:            (4096L * 1024L)
+BLOCK_SIZE:           (8L    * 1024L)
+NUM_BLOCKS_MEASURE:   64
+NOR flash:            MX25L25645G
+SPI frequency:        50 MHz
+SPI mode:             quad
+IDE:                  SEGGER Embedded Studio V5.62
+Compiler:             SEGGER
+Optimization level:   Level 2 for speed
+
+Start
+High-level format
+Writing 7 chunks of 512 KiB..........OK
+Reading 7 chunks of 512 KiB..........OK
+
+W Speed: 152 KiB/s
+R Speed: 18962 KiB/s
+Finished

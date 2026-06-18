@@ -1,0 +1,22 @@
+FS_ConfigNOR_BM_SPIFI_STM32F469_ST_STM32F469I_DISCO.c
+=====================================================
+FILE_SIZE:                  (8192L * 1024L)
+BLOCK_SIZE:                 (8L    * 1024L)
+NUM_BLOCKS_MEASURE:         64
+FS_NOR_HW_USE_OS:           0
+FS_NOR_HW_NOR_CLK_HZ:       45000000
+NOR flash:                  Micron N25Q128A13EF840F
+SPI frequency:              45 MHz
+SPI mode:                   quad
+IDE:                        SEGGER Embedded Studio V5.50A
+Compiler:                   SEGGER
+Optimization level:         Level 2 for speed
+
+Start
+High-level format
+Writing 16 chunks of 512 Kbytes...................OK
+Reading 16 chunks of 512 Kbytes...................OK
+
+W Speed: 176 Kbyte/s
+R Speed: 17655 Kbyte/s
+Finished

@@ -1,0 +1,27 @@
+FS_ConfigNOR_BM_ST25_SPI_STM32F103_IAR_STM32_SK.c
+=================================================
+Start
+High-level format
+Writing 7 chunks of 524288 bytes..........OK
+Reading 7 chunks of 524288 bytes..........OK
+
+W Speed: 65 Kbyte/s
+R Speed: 891 Kbyte/s
+Finished
+
+FS_ConfigNOR_BM_ST25_STM32F103_ST_MB672.c
+=========================================
+NOR flash:          Micron M25P64-VME6G
+
+Start
+High-level format
+Writing 15 chunks of 524288 bytes..................OK
+Reading 15 chunks of 524288 bytes..................OK
+
+W Speed: 51 Kbyte/s
+R Speed: 3047 Kbyte/s
+Finished
+
+FS_ConfigNOR_BM_CFI_1x16_STM32F103_ST_MB672.c
+=============================================
+NOR flash:          M29W128GH70ZA6E

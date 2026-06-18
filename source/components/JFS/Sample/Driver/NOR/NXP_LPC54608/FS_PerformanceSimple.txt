@@ -1,0 +1,12 @@
+FS_ConfigNOR_BM_SPIFI_LPC54608_NXP_LPCXpresso54608.c
+====================================================
+Serial NOR flash:     Winbond W25Q128JVFIM
+
+Start
+High-level format
+Writing 16 chunks of 512 Kbytes...................OK
+Reading 16 chunks of 512 Kbytes...................OK
+
+W Speed: 380 Kbyte/s
+R Speed: 11377 Kbyte/s
+Finished

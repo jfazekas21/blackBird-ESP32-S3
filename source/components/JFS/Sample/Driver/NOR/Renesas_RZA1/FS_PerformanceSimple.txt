@@ -1,0 +1,12 @@
+FS_ConfigNOR_BM_SPIFI_RZA1H_Renesas_RSKRZA1H.c
+==============================================
+Serial NOR flash:     Cypress S25FL512S
+
+Start
+High-level format
+Writing 16 chunks of 524288 bytes...................OK
+Reading 16 chunks of 524288 bytes...................OK
+
+W Speed: 151.613858 Kbyte/s
+R Speed: 10039.215686 Kbyte/s
+Finished

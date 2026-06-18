@@ -1,0 +1,17 @@
+FS_ConfigNOR_K60_Freescale_TWR_K60N512.c
+========================================
+FILE_SIZE:            (8192L * 1024L)
+BLOCK_SIZE:           (32L   * 1024L)
+NUM_BLOCKS_MEASURE:   64
+IDE:                  SEGGER Embedded Studio 5.66
+Compiler:             SEGGER
+Optimization Level:   Level 2 for speed
+
+Start
+High-level format
+Writing 1 chunks of 128 KiB....OK
+Reading 1 chunks of 128 KiB....OK
+
+W Speed: 58 KiB/s
+R Speed: 10666 KiB/s
+Finished

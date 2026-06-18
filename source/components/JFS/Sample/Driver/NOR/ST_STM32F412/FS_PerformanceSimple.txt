@@ -1,0 +1,22 @@
+FS_ConfigNOR_BM_SPIFI_STM32F412_ST_STM32F412G_Discovery.c
+=========================================================
+FILE_SIZE:            (8192L * 1024L)
+BLOCK_SIZE:           (8L    * 1024L)
+NUM_BLOCKS_MEASURE:   64
+FS_NOR_HW_NOR_CLK_HZ: 50000000
+NOR flash:            Micron N25Q128A13EF840F
+SPI frequency:        50 MHz
+SPI mode:             quad
+IDE:                  SEGGER Embedded Studio V5.50A
+Compiler:             SEGGER
+Optimization level:   Level 2 for speed
+
+Start
+High-level format
+Writing 16 chunks of 512 Kbytes...................OK
+Reading 16 chunks of 512 Kbytes...................OK
+
+W Speed: 70 Kbyte/s
+R Speed: 3531 Kbyte/s
+Finished
+

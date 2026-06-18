@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900&display=swap"
+   href="data:,"
+   
+    rel="stylesheet">
+  <link href="upload_script.css" rel="stylesheet" />
+  <script src="script1.js"></script>
+  <script src="server.js"></script>
+  <script src="config.json"></script>
+
+ <title>Document</title>
+
+  
+  <style>
+  
+  
+  body {
+  display: flex;
+  justify-content: center;
+  font-family: Poppins;
+}
+.progress-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 5px;
+}
+..progress-bar {
+    background-color: green; /* Set the background color of the progress bar */
+    height: 20px; /* Set the height of the progress bar */
+    transition: width 0.3s ease; /* Add transition effect for smooth width changes */
+    width: 0; /* Set initial width to 0 */
+}
+
+.progress-text {
+   display: block;
+    color: black; /* Set the color of the text */
+    font-size: 14px; /* Set the font size of the text */
+    text-align: center; /* Center the progress text */
+}
+
+.d-block {
+  display: block;
+}
+.banner-container {
+  width: 400px;
+  padding-bottom: 3rem;
+  @media (max-width: 900px) {
+    width: 95%;
+  }
+}
+.banner-header {
+  display: flex;
+  align-content: center;
+  align-items: center;
+  background-color: #9f9f9f;
+  .js-productTitle {
+    font-family: Poppins;
+    font-weight: Medium;
+    font-size: 20px;
+    opacity: 1;
+    text-align: left;
+    margin-left: 10px;
+  }
+}
+
+.menu_container {
+  margin: 30px auto;
+  width: 96%;
+  background: rgba(217, 217, 217, 1);
+  opacity: 1;
+  border-radius: 14px;
+  overflow: hidden;
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  height: 44px;
+  text-align: center;
+  font-size: 16px;
+  .active {
+    background: rgba(241, 241, 241, 1);
+    opacity: 1;
+    border-radius: 14px;
+    box-shadow: 0px 0px 4px rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+    padding: 6px 0;
+    margin: 0 3px;
+    font-weight: 600;
+  }
+  a {
+    width: 50%;
+    font-size: 16px;
+    color: black !important;
+    border: none;
+    background-color: transparent;
+    text-decoration: none;
+  }
+  span {
+    width: 50%;
+  }
+}
+
+.title-info {
+  font-family: Poppins;
+  font-weight: Medium;
+  font-size: 16px;
+  opacity: 1;
+  margin: 5px 0 0 20px;
+}
+
+.text-info {
+  margin: 0 auto;
+  width: 80%;
+  min-height: 40px;
+  background: rgba(217, 217, 217, 1);
+  opacity: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  padding-left: 10px;
+  font-weight: 500;
+}
+
+.divider {
+  width: 96%;
+  background-color: #dbdbdb;
+  height: 1px;
+  margin: 40px auto;
+}
+
+.upload-button {
+  font-size: 16px;
+  margin: 10px 0 20px 20px;
+  cursor: pointer;
+  background-color: transparent;
+  border: none;
+  padding: 0;
+  font-family: Poppins;
+}
+
+.COPUpdateContainer {
+  display: none;
+}
+
+input[type='file'] {
+  display: none;
+}
+  
+  
+  
+  </style>
+  
+  
+  
+  <script>   
+  
+
+  
+  
+  
+   /**********************************************************************************/
+    /*
+    ESP OTA related
+    */
+
+</head>
+
+<body>
+<script>    
+
+  // Asynchronous function to fetch data from a JSON file
+async function fetchData() {
+  try {
+    const response = await fetch('config.json');
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error fetching data:', error);
+    return null;
+  }
+}
+
+// Function to update HTML content with fetched data
+async function updateHTML() {
+  // Fetch data using the fetchData function
+  const data = await fetchData();
+
+  // Check if data is successfully fetched
+  if (data) {
+    // Update page title with data from config.json
+    document.title = data.titles.pageTitle;
+
+    // Log the fetched data to the console for debugging
+    console.log(data);
+
+    // Extract font color from data
+    const fontColor = data.colors.fontColor.fullHtml;
+
+    const elements = document.querySelectorAll('*');
+
+    elements.forEach((element) => {
+      try {
+        element.style.color = fontColor;
+      } catch (error) {
+        console.error(
+          `Error setting color for element: ${element.tagName}`,
+          error
+        );
+      }
+    });
+
+    const bannerContainerElement = document.querySelector('.banner-container');
+    bannerContainerElement.style.backgroundColor =
+      data.colors.bannerBackgroundColor;
+
+    const menuItemElement = document.querySelector('.menu-item');
+    menuItemElement.style.color = data.colors.fontColor.productText;
+    const activeItemElement = document.querySelector('.active');
+    activeItemElement.style.color = data.colors.fontColor.fullHtml;
+
+    const titleInfoElements = document.querySelectorAll('.title-info');
+    titleInfoElements.forEach((titleInfoElement) => {
+      titleInfoElement.style.color = data.colors.fontColor.productTitle;
+    });
+
+    const textInfoElements = document.querySelectorAll('.text-info');
+    textInfoElements.forEach((textInfoElement) => {
+      textInfoElement.style.backgroundColor = data.colors.productTextBackground;
+    });
+
+    const spanInfoElements = document.querySelectorAll('.span-info');
+    spanInfoElements.forEach((textInfoElement) => {
+      textInfoElement.style.color = data.colors.fontColor.productText;
+    });
+
+    // Update specific elements based on their class selectors
+    const bannerImageElement = document.querySelector(
+      '.js-img-header-container'
+    );
+    if (bannerImageElement) {
+      const imgElement = document.createElement('img');
+      imgElement.src = data.optional.bannerImageFilePath;
+      imgElement.width = data.optional.bannerImageSize.width;
+      imgElement.alt = data.titles.pageTitle;
+      imgElement.classList.add('d-block');
+      bannerImageElement.appendChild(imgElement);
+    } else {
+      console.error('Element with class "js-img-header-container" not found.');
+    }
+    const manufacturerNameElement = document.querySelector(
+      '.js-manufacturerName'
+    );
+    if (manufacturerNameElement) {
+      manufacturerNameElement.textContent = data.titles.manufacturerName;
+    } else {
+      console.error('Element with class "js-manufacturerName" not found.');
+    }
+
+    const productTitleElement = document.querySelector('.js-productTitle');
+    if (productTitleElement) {
+      productTitleElement.textContent = data.titles.pageTitle;
+      productTitleElement.style.color = data.colors.fontColor.pageTitle;
+    } else {
+      console.error('Element with class "js-productTitle" not found.');
+    }
+
+    const hardwareRevisionElement = document.querySelector(
+      '.js-hardwareRevision'
+    );
+    if (hardwareRevisionElement) {
+      hardwareRevisionElement.textContent = data.titles.HardwareRevision;
+    } else {
+      console.error('Element with class "js-hardwareRevision" not found.');
+    }
+
+    const productModelNameElement = document.querySelector(
+      '.js-productModelName'
+    );
+    if (productModelNameElement) {
+      productModelNameElement.textContent = data.titles.productmodelname;
+    } else {
+      console.error('Element with class "productModelName" not found.');
+    }
+
+    const firmwareElement = document.querySelector('.js-firmwareVersion');
+    if (firmwareElement) {
+      firmwareElement.textContent = data.titles.FirmwareVersion;
+    } else {
+      console.error('Element with class "firmwareVersion" not found.');
+    }
+
+    const deviceIDElement = document.querySelector('.js-deviceId');
+    if (deviceIDElement) {
+      deviceIDElement.textContent = data.titles.DeviceID;
+    } else {
+      console.error('Element with class "deviceId" not found.');
+    }
+
+    const COPUpdateContainerElement = document.querySelector(
+      '.COPUpdateContainer'
+    );
+    if (COPUpdateContainerElement) {
+      COPUpdateContainerElement.style.display = data.enableCOPUpdateButton
+        ? 'inherit'
+        : 'none';
+    } else {
+      console.error('Element with class "COPUpdateContainer" not found.');
+    }
+
+    // Set the background color of the body
+    document.body.style.backgroundColor = data.colors.backgroundColor;
+
+    // Update font color of the entire document
+    document.body.style.color = fontColor;
+  }
+
+  // Check onChange value for each input file
+  document.getElementById('file-upload_esp_communications').onchange =
+    function () {
+      var name = document.getElementById('file-upload_esp_communications');
+      document.querySelector('.js-espFirmwareFile').textContent =
+        name.files.item(0).name;
+    };
+
+  document.getElementById('file-upload_coprocessor').onchange = function () {
+    var name = document.getElementById('file-upload_coprocessor');
+    document.querySelector('.js-coprocessorFirmwareFile').textContent =
+      name.files.item(0).name;
+  };
+}
+
+
+
+function coprocessorFirmwareFileInstallUpdate(e) {
+  e.preventDefault();
+  alert('Co-processor Firmware File Install Update');
+  // Enter functionality of install update here
+}
+
+// Call the updateHTML function when the DOM content is fully loaded
+document.addEventListener('DOMContentLoaded', updateHTML);
+  
+ </script>    
+ 
+ <script>  
+ const express = require('express');
+const path = require('path');
+const app = express();
+const port = 8899;
+
+// Serve static files from the root directory
+app.use(express.static(__dirname));
+
+// Define a route for the root URL
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'upload_script2.html'));
+});
+app.get('/updates', (req, res) => {
+  res.sendFile(path.join(__dirname, 'upload_script1.html'));
+});
+// Your API routes and other configurations go here
+
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*'); // Allow any origin during development
+  next();
+});
+
+// Your API endpoint to serve the JSON data
+app.get('/config', (req, res) => {
+  const jsonData = {
+    // Your JSON data here
+  };
+
+  res.json(jsonData);
+});
+
+const PORT = 8899;
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});
+ 
+ </script>  
+
+ 
+  <div class="banner-container">
+    <form action="">
+      <div class="banner-header">
+        <div class="js-img-header-container">
+        </div>
+        <div class="title-header-container">
+          <span class="js-productTitle">productTitle</span>
+        </div>
+      </div>
+      <div class="menu_container">
+        <a class="menu-item" href="/">Device Info</a>
+        <span class="menu-item active">Updates</span>
+      </div>
+      <div class="main-container">
+        <div class="text-with-info-component">
+          <p class="title-info">ESP Communications IC</p>
+          <div class="text-info">
+            <span class="js-esp_communications span-info">Currently running version 4.21</span>
+          </div>
+          
+         
+          
+          <label for="file-upload_esp_communications">
+            <p class="upload-button">Upload File</p>
+          </label>
+          <input id="file-upload_esp_communications" type="file" accept=".bin, .txt, .exe"
+            name="file-upload_esp_communications" />
+        </div>
+        <div class="text-with-info-component">
+          <p class="title-info">ESP Firmware File</p>
+          <div class="text-info">
+            <span class="js-espFirmwareFile span-info">None selected</span>
+          </div>
+          <button onclick="espFirmwareFileInstallUpdate(event)" class="upload-button">Install update</button>
+        </div>
+        
+     <div class="progress">
+        <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+        <span class="progress-text">0%</span> <!-- Add this line for progress text -->
+    </div>
+     
+     </div>
+        <div class="COPUpdateContainer">
+          <div class="divider"></div>
+          <div class="text-with-info-component">
+            <p class="title-info">Coprocessor IC</p>
+            <div class="text-info">
+              <span class="js-coprocessorIC span-info">Currently running version 4.21</span>
+            </div>
+            <label for="file-upload_coprocessor">
+              <p class="upload-button">Upload File</p>
+            </label>
+            <input id="file-upload_coprocessor" type="file" accept=".bin, .txt, .exe" name="file-upload_coprocessor" />
+          </div>
+          <div class="text-with-info-component">
+            <p class="title-info">Coprocessor Firmware File</p>
+            <div class="text-info">
+              <span class="js-coprocessorFirmwareFile span-info">None selected</span>
+            </div>
+            <button onclick="coprocessorFirmwareFileInstallUpdate(event)" class="upload-button">Install update</button>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+  
+  <script>
+        // Function to dynamically update the version number
+        function updateVersionNumber(newVersion) {
+            // Find the element with the class 'js-esp_communications'
+            const versionElement = document.querySelector('.js-esp_communications');
+
+            // Check if the element exists
+            if (versionElement) {
+                // Update the text content of the element with the new version number
+                versionElement.textContent = `Currently running version ${newVersion}`;
+            } else {
+                console.error('Element with class "js-esp_communications" not found.');
+            }
+        }
+
+        // Example usage:
+        const newVersion = '0.24'; // Replace '4.22' with the actual new version number
+        updateVersionNumber(newVersion);
+        
+     
+    </script>
+</body>
+
+</html>

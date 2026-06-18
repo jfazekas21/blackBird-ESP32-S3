@@ -1,0 +1,12 @@
+FS_ConfigNOR_BM_SFDP_TM4C129_TI_TIVAC129.c
+==========================================
+NOR flash: Macronix MX66L51235F
+
+Start
+High-level format
+Writing 16 chunks of 524288 bytes...................OK
+Reading 16 chunks of 524288 bytes...................OK
+
+W Speed: 149 Kbyte/s
+R Speed: 4697 Kbyte/s
+Finished

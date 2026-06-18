@@ -1,0 +1,12 @@
+FS_ConfigNOR_BM_SPIFI_LPC4367_NXP_LPCXpresso4367.c
+==================================================
+Serial NOR flash:     Macronix MX25L8035E
+
+Start
+High-level format
+Writing 1 chunks of 524288 bytes....OK
+Reading 1 chunks of 524288 bytes....OK
+
+W Speed: 50 Kbyte/s
+R Speed: 5505 Kbyte/s
+Finished

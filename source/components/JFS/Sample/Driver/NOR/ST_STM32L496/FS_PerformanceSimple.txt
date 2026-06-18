@@ -1,0 +1,20 @@
+FS_ConfigNOR_BM_SPIFI_STM32FL496_ST_STM32L496G_DISCO.c
+======================================================
+FILE_SIZE:            (4096L * 1024L)
+BLOCK_SIZE:           (8L   * 1024L)
+NUM_BLOCKS_MEASURE:   64
+NOR flash:            Macronix MX25R6435F
+SPI frequency:        36 MHz
+SPI mode:             quad
+IDE:                  SEGGER Embedded Studio V5.10
+Compiler:             GCC
+Optimization level:   Level 2 for speed
+
+Start
+High-level format
+Writing 8 chunks of 512 Kbytes...........OK
+Reading 8 chunks of 512 Kbytes...........OK
+
+W Speed: 36 Kbyte/s
+R Speed: 10666 Kbyte/s
+Finished

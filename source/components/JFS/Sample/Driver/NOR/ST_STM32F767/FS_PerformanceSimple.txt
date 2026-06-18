@@ -1,0 +1,126 @@
+FS_ConfigNOR_BM_PHY_STM32F767.c
+===============================
+FILE_SIZE:                  (8192L * 1024L)
+BLOCK_SIZE:                 (8L    * 1024L)
+NUM_BLOCKS_MEASURE:         (64)
+FS_NOR_PHY_MAX_NUM_BYTES:   4
+IDE:                        SEGGER Embedded Studio V5.68
+Compiler:                   GCC
+Optimization level:         Level 2 for speed
+NOR flash:                  Internal
+CPU clock frequency:        216 MHz
+
+Start
+High-level format
+Writing 1 chunks of 128 KiB....OK
+Reading 1 chunks of 128 KiB....OK
+
+W Speed: 51 KiB/s
+R Speed: 128000 KiB/s
+Finished
+
+--
+
+FILE_SIZE:                  (8192L * 1024L)
+BLOCK_SIZE:                 (8L    * 1024L)
+NUM_BLOCKS_MEASURE:         (64)
+FS_NOR_PHY_MAX_NUM_BYTES:   2
+IDE:                        SEGGER Embedded Studio V5.68
+Compiler:                   GCC
+Optimization level:         Level 2 for speed
+NOR flash:                  Internal
+CPU clock frequency:        216 MHz
+
+Start
+High-level format
+Writing 1 chunks of 128 KiB....OK
+Reading 1 chunks of 128 KiB....OK
+
+W Speed: 21 KiB/s
+R Speed: 128000 KiB/s
+Finished
+
+--
+
+FILE_SIZE:                  (8192L * 1024L)
+BLOCK_SIZE:                 (8L    * 1024L)
+NUM_BLOCKS_MEASURE:         (64)
+FS_NOR_PHY_MAX_NUM_BYTES:   1
+IDE:                        SEGGER Embedded Studio V5.68
+Compiler:                   GCC
+Optimization level:         Level 2 for speed
+NOR flash:                  Internal
+CPU clock frequency:        216 MHz
+
+Start
+High-level format
+Writing 1 chunks of 128 KiB....OK
+Reading 1 chunks of 128 KiB....OK
+
+W Speed: 21 KiB/s
+R Speed: 128000 KiB/s
+Finished
+
+FS_ConfigNOR_PHY_STM32F767.c
+============================
+
+FILE_SIZE:                  (8192L * 1024L)
+BLOCK_SIZE:                 (8L    * 1024L)
+NUM_BLOCKS_MEASURE:         (64)
+FS_NOR_PHY_MAX_NUM_BYTES:   4
+IDE:                        SEGGER Embedded Studio V5.68
+Compiler:                   GCC
+Optimization level:         Level 2 for speed
+NOR flash:                  Internal
+CPU clock frequency:        216 MHz
+
+Start
+High-level format
+Writing 1 chunks of 512 KiB....OK
+Reading 1 chunks of 512 KiB....OK
+
+W Speed: 83 KiB/s
+R Speed: 128000 KiB/s
+Finished
+
+--
+
+FILE_SIZE:                  (8192L * 1024L)
+BLOCK_SIZE:                 (8L    * 1024L)
+NUM_BLOCKS_MEASURE:         (64)
+FS_NOR_PHY_MAX_NUM_BYTES:   2
+IDE:                        SEGGER Embedded Studio V5.68
+Compiler:                   GCC
+Optimization level:         Level 2 for speed
+NOR flash:                  Internal
+CPU clock frequency:        216 MHz
+
+Start
+High-level format
+Writing 1 chunks of 512 KiB....OK
+Reading 1 chunks of 512 KiB....OK
+
+W Speed: 53 KiB/s
+R Speed: 170666 KiB/s
+Finished
+
+--
+
+FILE_SIZE:                  (8192L * 1024L)
+BLOCK_SIZE:                 (8L    * 1024L)
+NUM_BLOCKS_MEASURE:         (64)
+FS_NOR_PHY_MAX_NUM_BYTES:   1
+IDE:                        SEGGER Embedded Studio V5.68
+Compiler:                   GCC
+Optimization level:         Level 2 for speed
+NOR flash:                  Internal
+CPU clock frequency:        216 MHz
+
+Start
+High-level format
+Writing 1 chunks of 512 KiB....OK
+Reading 1 chunks of 512 KiB....OK
+
+W Speed: 34 KiB/s
+R Speed: 128000 KiB/s
+Finished

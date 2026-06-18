@@ -1,0 +1,43 @@
+FS_ConfigNOR_BM_SPIFI_STM32H745_ST_STM32H745_DISCO.c
+====================================================
+FILE_SIZE:            (4096L * 1024L)
+BLOCK_SIZE:           (8L   * 1024L)
+NUM_BLOCKS_MEASURE:   64
+NOR flash:            Micron MT25QL512ABB8ESF-0SIT
+SPI mode:             quad
+SPI speed:            50 MHz
+Dual flash:           yes
+IDE:                  SEGGER Embedded Studio V5.66
+Compiler:             SEGGER
+Optimization level:   Level 2 for speed
+
+Start
+High-level format
+Writing 16 chunks of 512 KiB...................OK
+Reading 16 chunks of 512 KiB...................OK
+
+W Speed: 602 KiB/s
+R Speed: 56888 KiB/s
+Finished
+
+--
+
+FILE_SIZE:            (4096L * 1024L)
+BLOCK_SIZE:           (8L   * 1024L)
+NUM_BLOCKS_MEASURE:   64
+NOR flash:            Micron MT25QL512ABB8ESF-0SIT
+SPI mode:             quad
+SPI speed:            50 MHz
+Dual flash:           no
+IDE:                  SEGGER Embedded Studio V5.66
+Compiler:             SEGGER
+Optimization level:   Level 2 for speed
+
+Start
+High-level format
+Writing 16 chunks of 512 KiB...................OK
+Reading 16 chunks of 512 KiB...................OK
+
+W Speed: 341 KiB/s
+R Speed: 28444 KiB/s
+Finished

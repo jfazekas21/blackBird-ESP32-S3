@@ -1,0 +1,16 @@
+FS_NOR_HW_SPI_GD32F450_GD_GD32450i_EVAL.c
+-----------------------------------------
+FILE_SIZE:            (8192L * 1024L)
+BLOCK_SIZE:           (32L   * 1024L)
+NUM_BLOCKS_MEASURE:   64
+NOR flash:            GigaDevice GD25Q16B
+SPI mode:             Single
+
+Start
+High-level format
+Writing 3 chunks of 512 Kbytes......OK
+Reading 3 chunks of 512 Kbytes......OK
+
+W Speed: 219 Kbyte/s
+R Speed: 5565 Kbyte/s
+Finished

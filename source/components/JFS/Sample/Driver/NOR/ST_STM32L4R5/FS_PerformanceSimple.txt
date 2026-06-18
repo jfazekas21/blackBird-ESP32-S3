@@ -1,0 +1,23 @@
+FS_ConfigNOR_BM_PHY_STM32L4R5.c
+===============================
+
+Start
+High-level format
+Writing 1 chunks of 512 Kbytes....OK
+Reading 1 chunks of 512 Kbytes....OK
+
+W Speed: 55 Kbyte/s
+R Speed: 22260 Kbyte/s
+Finished
+
+FS_ConfigNOR_PHY_STM32L4R5.c
+============================
+
+Start
+High-level format
+Writing 1 chunks of 512 Kbytes....OK
+Reading 1 chunks of 512 Kbytes....OK
+
+W Speed: 88 Kbyte/s
+R Speed: 42666 Kbyte/s
+Finished

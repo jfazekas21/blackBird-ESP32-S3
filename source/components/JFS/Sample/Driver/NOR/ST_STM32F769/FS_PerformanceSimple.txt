@@ -1,0 +1,33 @@
+FS_ConfigNOR_BM_SPIFI_STM32F769_ST_STM32F769I_DISC1.c
+=====================================================
+NOR flash:      Macronix MX25L51245GZ2I-08G
+
+Start
+High-level format
+Writing 16 chunks of 524288 bytes...................OK
+Reading 16 chunks of 524288 bytes...................OK
+
+W Speed: 218.43 Kbyte/s
+R Speed: 10893.62 Kbyte/s
+Finished
+
+FS_ConfigNOR_BM_SPIFI_STM32F769_ST_STM32F769I_EVAL.c
+====================================================
+FILE_SIZE:            (8192L * 1024L)
+BLOCK_SIZE:           (8 * 1024L)
+NUM_BLOCKS_MEASURE:   (64)
+IDE:                  SEGGER Embedded Studio V5.50a
+Compiler:             GCC
+Optimization:         Level 2 for speed
+NOR flash:            Micron MT25QL512ABA8ESF-0SIT
+SPI frequency:        25 MHz
+SPI mode:             quad
+
+Start
+High-level format
+Writing 16 chunks of 512 Kbytes...................OK
+Reading 16 chunks of 512 Kbytes...................OK
+
+W Speed: 298 Kbyte/s
+R Speed: 10666 Kbyte/s
+Finished

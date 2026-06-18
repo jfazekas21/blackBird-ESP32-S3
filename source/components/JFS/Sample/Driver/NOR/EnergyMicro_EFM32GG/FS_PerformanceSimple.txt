@@ -1,0 +1,30 @@
+FS_ConfigNOR_BM_ST25_SPI_EFM32GG_EnergyMicro_EFR4D_STK6500.c
+============================================================
+NOR flash:    M25PX16
+IDE:          Embedded Studio V4.42
+Optimization: Level 2 for speed
+
+Start
+High-level format
+Writing 3 chunks of 512 Kbytes......OK
+Reading 3 chunks of 512 Kbytes......OK
+
+W Speed: 55 Kbyte/s
+R Speed: 347 Kbyte/s
+Finished
+
+FS_ConfigNOR_EFM32GG_EnergyMicro_EFM32GG_DK3750.c
+=================================================
+IDE:          Embedded Studio V5.42
+Compiler:     GCC
+Optimization: Level 2 for speed
+
+Start
+Low-level format
+High-level format
+Writing 1 chunks of 512 Kbytes....OK
+Reading 1 chunks of 512 Kbytes....OK
+
+W Speed: 121 Kbyte/s
+R Speed: 9142 Kbyte/s
+Finished

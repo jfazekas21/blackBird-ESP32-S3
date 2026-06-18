@@ -1,0 +1,30 @@
+{
+  "colors": {
+    "backgroundColor": "#f1f1f1",
+    "bannerBackgroundColor": "#fff",
+    "headerBackgroundColor": "#9f9f9f",
+    "productTextBackground": "#D9D9D9",
+    "fontColor": {
+      "pageTitle": "#000",
+      "productTitle": "#969696",
+      "productText": "#000",
+      "fullHtml": "rgba(1, 111, 255, 1)"
+    }
+  },
+  "titles": {
+    "pageTitle": "WebServer for FOTA Process",
+    "manufacturerName": "trimLight Controller",
+    "productmodelname": "SB600",
+    "HardwareRevision": "1.0.1",
+    "FirmwareVersion": " 2.0.2",
+    "DeviceID": "88:CC:88:BB:CC"
+  },
+  "optional": {
+    "bannerImageFilePath": "./example.jpg",
+    "bannerImageSize": {
+      "width": 64,
+      "height": 64
+    }
+  },
+  "enableCOPUpdateButton": true
+}

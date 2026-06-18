@@ -1,0 +1,19 @@
+FS_ConfigNOR_ST25_SPI_RX62N_Renesas_RSKRX64M.c
+==============================================
+FILE_SIZE:            (8192L * 1024L)
+BLOCK_SIZE:           (8 * 1024L)
+NUM_BLOCKS_MEASURE:   (64)
+IDE:                  IAR RX V3.10A
+Optimization:         High (Speed)
+Serial NOR flash:     Macronix MX25L3235EM2I-10G
+SPI frequency:        30 Mhz
+SPI mode:             single
+
+Start
+High-level format
+Writing 7 chunks of 512 Kbytes..........OK
+Reading 7 chunks of 512 Kbytes..........OK
+
+W Speed: 132 Kbyte/s
+R Speed: 2497 Kbyte/s
+Finished

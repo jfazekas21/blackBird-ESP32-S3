@@ -1,0 +1,40 @@
+FS_ConfigNOR_BM_SFDP_RX62N_Renesas_RSKRX65N.c
+=============================================
+FILE_SIZE:            (8192L * 1024L)
+BLOCK_SIZE:           (8 * 1024L)
+NUM_BLOCKS_MEASURE:   (64)
+IDE:                  IAR RX V3.10A
+Optimization:         High (Speed)
+Serial NOR flash:     Macronix MX25L3233FM2I-08G
+SPI frequency:        30 Mhz
+SPI mode:             single
+
+Start
+High-level format
+Writing 7 chunks of 512 Kbytes..........OK
+Reading 7 chunks of 512 Kbytes..........OK
+
+W Speed: 157 Kbyte/s
+R Speed: 3849 Kbyte/s
+Finished
+
+FS_ConfigNOR_BM_SFDP_RX62N_Renesas_RSKRX65N.c
+=============================================
+FILE_SIZE:            (8192L * 1024L)
+BLOCK_SIZE:           (8 * 1024L)
+NUM_BLOCKS_MEASURE:   (64)
+IDE:                  IAR RX V4.12A
+Optimization:         High (Balanced)
+Serial NOR flash:     Macronix MX25L3233FM2I-08G
+SPI frequency:        30 Mhz
+SPI mode:             single
+
+Start
+Low-level format
+High-level format
+Writing 7 chunks of 512 KiB..........OK
+Reading 7 chunks of 512 KiB..........OK
+
+W Speed: 120 KiB/s
+R Speed: 2337 KiB/s
+Finished

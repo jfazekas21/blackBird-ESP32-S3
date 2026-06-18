@@ -1,0 +1,16 @@
+FS_ConfigNOR_BM_SPIFI_STM32F746_ST_STM32F746G-DISCO.c
+=====================================================
+FILE_SIZE:            (8192L * 1024L)
+BLOCK_SIZE:           (8L    * 1024L)
+NUM_BLOCKS_MEASURE:   (64)
+NOR flash:            Micron N25Q128A13EF840E
+SPI clock frequency:  25 MHz
+
+Start
+High-level format
+Writing 16 chunks of 512 Kbytes...................OK
+Reading 16 chunks of 512 Kbytes...................OK
+
+W Speed: 308 Kbyte/s
+R Speed: 10240 Kbyte/s
+Finished

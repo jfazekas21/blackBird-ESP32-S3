@@ -1,0 +1,14 @@
+FS_ConfigNOR_BM_SPIFI_STM32MP157_ST_STM32MP15x_EV1.c
+====================================================
+NOR flash: Macronix MX25L51245G
+SPI freq:  66 MHz
+IDE:       Embedded Studio V4.42 (Code > Code Generation > Optimization Level: Level 2 for speed)
+
+Start
+High-level format
+Writing 16 chunks of 512 Kbytes...................OK
+Reading 16 chunks of 512 Kbytes...................OK
+
+W Speed: 206 Kbyte/s
+R Speed: 5171 Kbyte/s
+Finished

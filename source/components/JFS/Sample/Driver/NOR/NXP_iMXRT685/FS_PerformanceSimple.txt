@@ -1,0 +1,42 @@
+FS_ConfigNOR_BM_SPIFI_iMXRT685_NXP_MIMXRT685_EVK.c
+==================================================
+FILE_SIZE:            (4096L * 1024L)
+BLOCK_SIZE:           (8L    * 1024L)
+NUM_BLOCKS_MEASURE:   64
+NOR flash:            MX25LM51345G
+SPI frequency:        60 MHz
+SPI mode:             single
+IDE:                  SEGGER Embedded Studio V6.32B
+Compiler:             SEGGER
+Optimization level:   Level 2 for speed
+
+Start
+High-level format
+Writing 16 chunks of 512 KiB...................OK
+Reading 16 chunks of 512 KiB...................OK
+
+W Speed: 213 KiB/s
+R Speed: 7211 KiB/s
+Finished
+
+--
+
+FILE_SIZE:            (4096L * 1024L)
+BLOCK_SIZE:           (8L    * 1024L)
+NUM_BLOCKS_MEASURE:   64
+NOR flash:            MX25LM51345G
+SPI frequency:        60 MHz
+SPI mode:             octal
+Transfer mode:        single
+IDE:                  SEGGER Embedded Studio V6.32B
+Compiler:             SEGGER
+Optimization level:   Level 2 for speed
+
+Start
+High-level format
+Writing 16 chunks of 512 KiB...................OK
+Reading 16 chunks of 512 KiB...................OK
+
+W Speed: 214 KiB/s
+R Speed: 56888 KiB/s
+Finished

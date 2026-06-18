@@ -1,0 +1,39 @@
+menu "SELECT ESP HARDWARE"
+
+choice
+    prompt "Select ESP Hardware"
+    default HARDWARE_B480
+
+config HARDWARE_B480
+    bool "B480"
+    help 
+    	"Generate .bin file for B480 hardware"
+
+config HARDWARE_B553
+    bool "B553"
+    help 
+    	"Generate .bin file for B553 hardware"
+
+config HARDWARE_B543
+    bool "B543"
+    help 
+    	"Generate .bin file for B543 hardware"
+    	
+config HARDWARE_B542
+    bool "B542"
+    help 
+    	"Generate .bin file for B542 hardware"    	
+config HARDWARE_B394
+    bool "B394"
+    help 
+    	"Generate .bin file for B394 hardware"
+
+config HARDWARE_B527
+    bool "B527"
+    help 
+    	"Generate .bin file for B527 hardware"
+endchoice
+
+endmenu
+
+

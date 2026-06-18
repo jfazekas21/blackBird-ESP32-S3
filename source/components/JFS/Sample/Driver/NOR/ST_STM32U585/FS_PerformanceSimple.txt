@@ -1,0 +1,64 @@
+FS_ConfigNOR_BM_SPIFI_STM32U585_ST_B_U585I_IOT02A_Discovery.c
+-------------------------------------------------------------
+FILE_SIZE:            (4096L * 1024L)
+BLOCK_SIZE:           (8L    * 1024L)
+NUM_BLOCKS_MEASURE:   64
+NOR flash:            MX25LM51245G
+SPI frequency:        40 MHz
+SPI mode:             single
+IDE:                  SEGGER Embedded Studio V6.30
+Compiler:             SEGGER
+Optimization level:   Level 2 for speed
+
+Start
+High-level format
+Writing 16 chunks of 512 KiB...................OK
+Reading 16 chunks of 512 KiB...................OK
+
+W Speed: 135 KiB/s
+R Speed: 4491 KiB/s
+Finished
+
+--
+
+FILE_SIZE:            (4096L * 1024L)
+BLOCK_SIZE:           (8L    * 1024L)
+NUM_BLOCKS_MEASURE:   64
+NOR flash:            MX25LM51245G
+SPI frequency:        40 MHz
+SPI mode:             octal
+Transfer mode:        single
+IDE:                  SEGGER Embedded Studio V6.30
+Compiler:             SEGGER
+Optimization level:   Level 2 for speed
+
+Start
+High-level format
+Writing 16 chunks of 512 KiB...................OK
+Reading 16 chunks of 512 KiB...................OK
+
+W Speed: 152 KiB/s
+R Speed: 24380 KiB/s
+Finished
+
+--
+
+FILE_SIZE:            (4096L * 1024L)
+BLOCK_SIZE:           (32L   * 1024L)
+NUM_BLOCKS_MEASURE:   64
+NOR flash:            MX25LM51245G
+SPI frequency:        40 MHz
+SPI mode:             octal 
+Transfer mode:        double
+IDE:                  SEGGER Embedded Studio V6.30
+Compiler:             SEGGER
+Optimization level:   Level 2 for speed
+
+Start
+High-level format
+Writing 16 chunks of 512 KiB...................OK
+Reading 16 chunks of 512 KiB...................OK
+
+W Speed: 229 KiB/s
+R Speed: 34133 KiB/s
+Finished

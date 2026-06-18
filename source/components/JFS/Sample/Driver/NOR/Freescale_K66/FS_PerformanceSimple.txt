@@ -1,0 +1,8 @@
+Start
+High-level format
+Writing 2 chunks of 524288 bytes.....OK
+Reading 2 chunks of 524288 bytes.....OK
+
+W Speed: 57 Kbyte/s
+R Speed: 2255 Kbyte/s
+Finished

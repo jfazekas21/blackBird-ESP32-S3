@@ -1,0 +1,58 @@
+[
+  {
+    "id": 1,
+    "name": "json test",
+    "price": "284.00",
+    "inventory": 13,
+    "productCode": "K203"
+  },
+  {
+    "id": 2,
+    "name": "json test1",
+    "price": "198.00",
+    "inventory": 14,
+    "productCode": "K433"
+  },
+  {
+    "id": 3,
+    "name": "json test2",
+    "price": "350.00",
+    "inventory": 7,
+    "productCode": "K012"
+  },
+  {
+    "id": 4,
+    "name": "json test3",
+    "price": "790.00",
+    "inventory": 5,
+    "productCode": "G0127"
+  },
+  {
+    "id": 5,
+    "name": "json test4",
+    "price": "430.00",
+    "inventory": 2,
+    "productCode": "G1233"
+  },
+  {
+    "id": 6,
+    "name": "json test5",
+    "price": "650.00",
+    "inventory": 6,
+    "productCode": "G4478"
+  },
+  {
+    "id": 7,
+    "name": "json test6",
+    "price": "430.00",
+    "inventory": 2,
+    "productCode": "G1233"
+  },
+  {
+    "id": 8,
+    "name": "json test7",
+    "price": "650.00",
+    "inventory": 6,
+    "productCode": "G4478"
+  }
+]
