@@ -1,0 +1,2 @@
+# Default sdkconfig values. Run `idf.py set-target esp32s3` to apply the target.
+CONFIG_IDF_TARGET="esp32s3"

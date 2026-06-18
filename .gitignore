@@ -1,0 +1,35 @@
+# ESP-IDF build output
+build/
+sdkconfig
+sdkconfig.old
+
+# ESP-IDF component manager
+managed_components/
+dependencies.lock
+
+# Editor / IDE
+.vscode/
+.idea/
+.cache/
+.devcontainer/
+*.code-workspace
+
+# CMake
+cmake-build-*/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python (IDF tooling / virtualenvs)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
