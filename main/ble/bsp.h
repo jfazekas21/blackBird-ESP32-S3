@@ -44,12 +44,14 @@ typedef struct {
     uint8_t  rx_window;     /* credits currently advertised to sender        */
     uint16_t conn_handle;   /* NimBLE connection handle                      */
     bool     active;        /* true while a connection is live               */
+    bool     ack_pending;   /* a cumulative ACK needs to be sent             */
 } bsp_state_t;
 
 /* ── Speed-test bench state (armed/disarmed by JSON commands) ─────────────── */
 typedef struct {
     volatile uint32_t rx_bytes;
     volatile uint32_t crc32;
+    volatile uint32_t expected_bytes;
     volatile bool     armed;
     volatile bool     active;
 } bsp_bench_state_t;
@@ -76,6 +78,14 @@ void bsp_feed(bsp_state_t *s, const uint8_t *pkt, uint16_t pkt_len);
 
 /* Send a BSP ACK frame (5 bytes) via bsp_notify */
 void bsp_send_ack(bsp_state_t *s, uint8_t seq, uint8_t window);
+
+/*
+ * Send a cumulative ACK for all in-order frames received since the last ACK.
+ * Call this after draining a batch of packets from the processing queue so
+ * that one NOTIFY covers all frames instead of one per frame.
+ * No-op if no in-order frame has been received since the last flush.
+ */
+void bsp_flush_ack(bsp_state_t *s);
 
 /*
  * Feed raw payload bytes into the BSP record reassembler.

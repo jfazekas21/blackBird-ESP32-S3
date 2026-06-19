@@ -3754,3 +3754,19 @@ int should_skip_ssid(const char *ssid) {
 
 //
 //------------------------ WIFI Actor Methods Ends ------------------------------------------------------------------------//
+
+/* ── Public property accessors for spec-compliant JSON get/set ────────────
+ * Called from BLE_Actor.c bsp_handle_json and from menu_builder.c.       */
+bool wifi_actor_get(const char *name, char *val_out, size_t max_len)
+{
+    if (!name || !val_out || max_len == 0) return false;
+    val_out[0] = '\0';
+    get((char *)name, val_out);
+    return val_out[0] != '\0';
+}
+
+bool wifi_actor_set(const char *name, const char *val_in)
+{
+    if (!name || !val_in) return false;
+    return set((char *)name, (char *)val_in, NULL) == 1;
+}

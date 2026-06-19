@@ -16,7 +16,7 @@
 #define DEF_sdcard_DBG_STATE 	0
 #define DEF_EEPROM_DBG_STATE 	0
 //#define PAYLOAD_SIZE			2048	//1024
-#define NUMBER_OF_ACTORS 		23
+#define NUMBER_OF_ACTORS 		24
 #define Device_File		 "Device_Information.json"   //SPIFFS file to store device information
 
 extern TickType_t QUE_DELAY;
@@ -48,6 +48,7 @@ enum {
 	EVENT_ACTOR,
 	SYS_FILES,
 	B394_DI,
+	MODEL_225,
 	//as per requirement other queue will be insert
 };
 

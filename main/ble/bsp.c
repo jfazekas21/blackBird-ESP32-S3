@@ -41,6 +41,7 @@ void bsp_reset(bsp_state_t *s, uint16_t conn_handle)
     s->rx_window   = BSP_WINDOW;
     s->conn_handle = conn_handle;
     s->active      = true;
+    s->ack_pending = false;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -78,6 +79,7 @@ void bsp_feed(bsp_state_t *s, const uint8_t *pkt, uint16_t pkt_len)
         if (crc != ((uint16_t)pkt[1] | ((uint16_t)pkt[2] << 8))) return;
         s->rx_expected = 0;
         s->rx_window   = BSP_WINDOW;
+        s->ack_pending = false;
         ESP_LOGI(TAG, "RST received — seq reset");
         return;
     }
@@ -99,20 +101,39 @@ void bsp_feed(bsp_state_t *s, const uint8_t *pkt, uint16_t pkt_len)
         return;   /* silent drop — Flutter will retransmit on ACK timeout */
     }
 
-    /* Out-of-order: re-ACK last good seq to trigger retransmit from sender */
+    /* Out-of-order: NAK last good seq to trigger retransmit from sender.
+     * Sent immediately (not deferred) so the sender retransmits quickly.
+     * Also clears ack_pending because this NACK covers the same seq range
+     * that bsp_flush_ack would have sent. */
     if (seq != s->rx_expected) {
         uint8_t last_good = (uint8_t)((s->rx_expected - 1u) & 0xFFu);
         ESP_LOGW(TAG, "OOO seq=%d expected=%d", seq, s->rx_expected);
         bsp_send_ack(s, last_good, s->rx_window);
+        s->ack_pending = false;
         return;
     }
 
-    /* Feed payload into record reassembler */
-    bsp_record_feed(pkt + 4, plen);
-
-    /* Advance expected sequence, always advertise full window */
+    /* Accept frame: advance rx_expected and mark deferred ACK.
+     * bsp_proc_task calls bsp_flush_ack() after draining the entire queue
+     * so one cumulative ACK covers all frames in the batch. */
     s->rx_expected = (uint8_t)((s->rx_expected + 1u) & 0xFFu);
-    bsp_send_ack(s, seq, BSP_WINDOW);
+    s->ack_pending = true;
+
+    /* Feed payload into record reassembler (may call bsp_handle_json etc.) */
+    bsp_record_feed(pkt + 4, plen);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * bsp_flush_ack: send one cumulative ACK for all in-order frames received
+ * since the last flush.  Called by bsp_proc_task after draining its queue
+ * so that a burst of N DATA frames produces exactly one NOTIFY instead of N.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+void bsp_flush_ack(bsp_state_t *s)
+{
+    if (!s->ack_pending) return;
+    uint8_t cumulative = (uint8_t)((s->rx_expected - 1u) & 0xFFu);
+    bsp_send_ack(s, cumulative, BSP_WINDOW);
+    s->ack_pending = false;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -228,4 +249,4 @@ void bsp_on_record(uint8_t channel, const uint8_t *payload, uint32_t len)
 /* ═══════════════════════════════════════════════════════════════════════════
  * Speed-test bench state (armed/disarmed by JSON commands in BLE_Actor.c)
  * ═══════════════════════════════════════════════════════════════════════════ */
-bsp_bench_state_t g_bsp_bench = {0, 0, false, false};
+bsp_bench_state_t g_bsp_bench = {0, 0, 0, false, false};

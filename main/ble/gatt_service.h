@@ -68,4 +68,16 @@ extern volatile uint16_t g_bsp_conn_handle;
 /* Send len bytes as a BLE notification on the TX characteristic */
 void bsp_notify(uint16_t conn_handle, const uint8_t *data, uint16_t len);
 
+/* Build a BSP DATA frame wrapping one BSP record and notify.
+ * channel: BSP_CH_JSON / BSP_CH_FILE / BSP_CH_BENCH (from bsp.h)
+ * Uses an internal static TX sequence counter.
+ */
+void bsp_send_record(uint8_t channel, const uint8_t *payload, uint32_t len);
+
+/* Called from BLE_GAP_EVENT_CONNECT (success): resets BSP state and records handle */
+void bsp_on_connect(uint16_t conn_handle);
+
+/* Called from BLE_GAP_EVENT_DISCONNECT: clears notify flag and marks BSP inactive */
+void bsp_on_disconnect(void);
+
 #endif /* MAIN_BLE_GATT_SERVICE_H_ */

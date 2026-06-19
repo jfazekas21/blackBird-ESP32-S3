@@ -1401,3 +1401,18 @@ static void reset_time_buffers(void)
 	avg_drift_us_per_s = 0;
 }
 
+/* ── Public property accessors for spec-compliant JSON get/set ── */
+bool ntp_actor_get(const char *name, char *val_out, size_t max_len)
+{
+    if (!name || !val_out || max_len == 0) return false;
+    val_out[0] = '\0';
+    get((char *)name, val_out);
+    return val_out[0] != '\0';
+}
+
+bool ntp_actor_set(const char *name, const char *val_in)
+{
+    if (!name || !val_in) return false;
+    return set((char *)name, (char *)val_in, NULL) == 1;
+}
+

@@ -17,6 +17,7 @@
 #include "UART_Actor.h"
 #include "pushbutton_Actor.h"
 #include "SPIFFS_Actor.h"
+#include "device_config.h"
 #include "ETH_Actor.h"
 #include "JFS_FLASH_Actor.h"
 #include "SMTP_Actor.h"
@@ -33,6 +34,7 @@
 #include "EVENT_Actor.h"
 #include "System_Files_Actor.h"
 #include "B394_DigitalInput.h"
+#include "195_Actor.h"
 #include "Config.h"
 #include "pcf8563.h"
 #include "esp_ota_ops.h"
@@ -149,6 +151,7 @@ ActorQueue A_Queue[NUMBER_OF_ACTORS] = {                         // Queue proper
 		{ "EVENT_ACTOR"		, EVENT_ACTOR	},
 		{ "SYS_FILES"		, SYS_FILES		},
 		{ "B394_DI"			, B394_DI		},
+		{ "Model225"		, MODEL_225		},
 };
 
 static const unsigned short days[4][12] =
@@ -1128,12 +1131,32 @@ void console_que_sel(AMessage_st* s_Message) {
 #if defined(B394)
 				case B394_DI		:	B394_DI_ConsoleWriteToActor_xface(&s_Message_Tx_new);	break;
 #endif
+				case MODEL_225		:	model225_ConsoleWriteToActor_xface(&s_Message_Tx_new);	break;
 			    default			    :	break;
 			}
 			break; // Exit loop once actor is found and processed
 		}
 
 	}
+	/* Route all Model 225 sub-actors (menu navigation actors) to 195_Actor */
+	if (!actor_found) {
+		static const char * const m225_subs[] = {
+			"IndicatorSetup","ScaleSetup","ScaleCalibration","LoadCellAssignments",
+			"ComSetup","SerialPorts","Ethernet","WiFi","ISiteIP","SendGross","BankMode",
+			"PrinterSetup","SystemConfig","Accumulators","DACOutput","KeyLockout",
+			"BadgeReader","WINVRS","ModeConfig","IDStorage","DFC","Batcher",
+			"PackageWeigher","AxleWeigher","CheckWeigher","PWC","Livestock",
+			"DLCSetup","ReviewMenu","195Menu"
+		};
+		for (int si = 0; si < (int)(sizeof(m225_subs)/sizeof(m225_subs[0])); si++) {
+			if (!strcmp((char*)s_Message_Tx_new.dest_Actor_a8, m225_subs[si])) {
+				model225_ConsoleWriteToActor_xface(&s_Message_Tx_new);
+				actor_found = 1;
+				break;
+			}
+		}
+	}
+
 	if (!actor_found) {
 	    // Actor not found, add error message
 		if(s_Message_Tx_new.payload_p8 != NULL)
@@ -2156,22 +2179,22 @@ static void InitActors(void *pvParameters __attribute__((unused))) {
     #if defined(B480)
 	if(Hardware_RevH_flag == true)
 	{
-		sprintf(payload,"********** HAVEN FIRMWARE %s VERSION  HARDWARE X-SERIES **********",Device_Fw_Ver);
+		sprintf(payload,"***** " DEVICE_COMPANY " FIRMWARE %s HARDWARE X-SERIES *****",Device_Fw_Ver);
 	}
 	else
 	{
-		sprintf(payload,"********** HAVEN FIRMWARE %s VERSION  HARDWARE REV E **********",Device_Fw_Ver);
+		sprintf(payload,"***** " DEVICE_COMPANY " FIRMWARE %s HARDWARE REV E *****",Device_Fw_Ver);
 	}
 	#elif defined(B543)
-	 sprintf(payload,"********** HAVEN FIRMWARE %s VERSION  HARDWARE X-POE **********",Device_Fw_Ver);
+	 sprintf(payload,"***** " DEVICE_COMPANY " FIRMWARE %s HARDWARE X-POE *****",Device_Fw_Ver);
 	#elif defined(B542)
-	 sprintf(payload,"********** HAVEN FIRMWARE %s VERSION  HARDWARE Q-POE **********",Device_Fw_Ver);
+	 sprintf(payload,"***** " DEVICE_COMPANY " FIRMWARE %s HARDWARE Q-POE *****",Device_Fw_Ver);
 	#elif defined(B394)
-	 sprintf(payload,"********** HAVEN FIRMWARE %s VERSION  HARDWARE AUTOMATION LINK  **********",Device_Fw_Ver);
+	 sprintf(payload,"***** " DEVICE_COMPANY " FIRMWARE %s HARDWARE AUTOMATION LINK *****",Device_Fw_Ver);
 	#elif defined(B527)
-	 sprintf(payload,"********** HAVEN FIRMWARE %s VERSION  HARDWARE SMART OUTLET  **********",Device_Fw_Ver);
+	 sprintf(payload,"***** " DEVICE_COMPANY " FIRMWARE %s HARDWARE SMART OUTLET *****",Device_Fw_Ver);
 	#else
-	 sprintf(payload,"********** HAVEN FIRMWARE %s VERSION  HARDWARE X-MINI **********",Device_Fw_Ver);
+	 sprintf(payload,"***** " DEVICE_COMPANY " FIRMWARE %s HARDWARE X-MINI *****",Device_Fw_Ver);
 	#endif
 
 	// Get CPU reset reasons

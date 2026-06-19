@@ -37,6 +37,44 @@
 #include "device_info/device_info.h"
 #include "gatt_service.h"
 #include "host/ble_hs.h"
+#include "bsp.h"
+#include "menu_builder.h"
+#include "device_config.h"
+
+/* ── Actor property accessors — public wrappers in each actor .c ─────────── */
+extern bool wifi_actor_get  (const char *name, char *val_out, size_t max_len);
+extern bool wifi_actor_set  (const char *name, const char *val_in);
+extern bool eth_actor_get   (const char *name, char *val_out, size_t max_len);
+extern bool eth_actor_set   (const char *name, const char *val_in);
+extern bool ntp_actor_get   (const char *name, char *val_out, size_t max_len);
+extern bool ntp_actor_set   (const char *name, const char *val_in);
+extern bool uart_actor_get  (const char *name, char *val_out, size_t max_len);
+extern bool uart_actor_set  (const char *name, const char *val_in);
+extern bool system_actor_get(const char *name, char *val_out, size_t max_len);
+extern bool system_actor_set(const char *name, const char *val_in);
+/* Model 225 Indicator sub-actors */
+extern bool m225_actor_get  (const char *name, char *val_out, size_t max_len);
+extern bool m225_actor_set  (const char *name, const char *val_in);
+extern void m225_set_menu_ctx(const char *ctx);
+
+static bool is_m225_sub_actor(const char *act)
+{
+    static const char * const subs[] = {
+        "IndicatorSetup","ScaleSetup","ScaleCalibration","LoadCellAssignments",
+        "ComSetup","SerialPorts","Ethernet","WiFi","ISiteIP","SendGross","BankMode",
+        "PrinterSetup","SystemConfig","Accumulators","DACOutput","KeyLockout",
+        "BadgeReader","WINVRS","ModeConfig","IDStorage","DFC","Batcher",
+        "PackageWeigher","AxleWeigher","CheckWeigher","PWC","Livestock",
+        "DLCSetup","ReviewMenu","195Menu","Model225"
+    };
+    for (int si = 0; si < (int)(sizeof(subs)/sizeof(subs[0])); si++)
+        if (!strcmp(act, subs[si])) return true;
+    return false;
+}
+
+/* Forward declarations — implemented at end of this file */
+bool ble_actor_get(const char *name, char *val_out, size_t max_len);
+bool ble_actor_set(const char *name, const char *val_in);
 
 #define RX_QUE_COUNT  10
 #define MAX_BUFFER_SIZE 512
@@ -766,42 +804,54 @@ static void blehr_advertise(void) {
     struct ble_gap_adv_params adv_params;
     struct ble_hs_adv_fields fields, scan_rsp;
     int rc;
-    static uint8_t mfg_data[26] = {0}; // Max 26 byte
-    char deviceStatus = get_deviceStatus();
+    printf("[ADV] blehr_advertise called: stack_init=%d hs_enabled=%d adv_active=%d\n",
+           ble_stack_initialized, ble_hs_is_enabled(), ble_gap_adv_active());
 
     if (!ble_stack_initialized || !ble_hs_is_enabled() || ble_gap_adv_active()) {
+        printf("[ADV] guard blocked advertising\n");
         return;
     }
 
-    // Format the firmware version string with the device status
-    strcpy((char *)mfg_data, (char *)Device_Fw_Ver);
-    sprintf((char *)mfg_data + strlen((char *)mfg_data), "(%c)", deviceStatus);
+    /* Spec §4.1: manufacturer data layout:
+     *   [0xC5,0x10]  Company ID LE  (0x10C5)
+     *   [0x03,0x00]  Product ID LE  (3 = Model 225)
+     *   [0x01]       Protocol major
+     *   [0x00]       Protocol minor
+     *   [6 bytes]    BLE MAC address
+     */
+    static uint8_t mfg_data[12];
+    uint8_t mac[6] = {0};
+    ble_hs_id_copy_addr(blehr_addr_type, mac, NULL);
+    mfg_data[0] = 0xC5;
+    mfg_data[1] = 0x10;
+    mfg_data[2] = (DEVICE_PRODUCT_ID) & 0xFF;
+    mfg_data[3] = (DEVICE_PRODUCT_ID >> 8) & 0xFF;
+    mfg_data[4] = 0x01;
+    mfg_data[5] = 0x00;
+    memcpy(mfg_data + 6, mac, 6);
 
-    //------------ Adv. data Logic End -------------------------------------//
+    /* Shortened local name (first 6 chars) in primary packet;
+     * full name goes in scan response. */
+    static char short_name[7] = {0};
+    strncpy(short_name, (char *)&s_Para.device_name_a8, 6);
+    short_name[6] = '\0';
 
     // Clear the advertisement fields structure
     memset(&fields, 0, sizeof(fields));
 
-    // Set advertisement flags (General discoverable and BR/EDR unsupported)
-    //    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.flags            = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;  /* 0x06 */
+    fields.mfg_data         = mfg_data;
+    fields.mfg_data_len     = sizeof(mfg_data);
+    fields.name             = (uint8_t *)short_name;
+    fields.name_len         = (uint8_t)strlen(short_name);
+    fields.name_is_complete = 0;   /* 0 = shortened local name (0x08) */
 
-    // Set advertisement flags (shortened)
-    fields.flags = BLE_HS_ADV_F_DISC_GEN;
-#ifdef ENABLE_PRINT_MSG
-    printf("Flags set: 0x%02X\n", fields.flags);
-#endif
-
-    // Set manufacturer data (8 bytes)
-    fields.mfg_data = mfg_data;
-    fields.mfg_data_len = strlen((char *)mfg_data);	//sizeof(mfg_data);
-
-    // We will not include the device name in the advertisement packet to save space
-    fields.name = NULL;
-    fields.name_len = 0;
-    fields.name_is_complete = 0;
+    printf("[ADV] mfg C5:10:03:00 MAC %02X:%02X:%02X:%02X:%02X:%02X short='%s'\n",
+           mac[0],mac[1],mac[2],mac[3],mac[4],mac[5], short_name);
 
     // Set advertisement fields
     rc = ble_gap_adv_set_fields(&fields);
+    printf("[ADV] ble_gap_adv_set_fields rc=%d\n", rc);
     if (rc != 0) {
         printf("Error setting advertisement fields, rc = %d\n", rc);
         return;
@@ -818,17 +868,21 @@ static void blehr_advertise(void) {
     scan_rsp.name = (uint8_t *)&s_Para.device_name_a8;
     scan_rsp.name_len = strlen((char*)&s_Para.device_name_a8);
     scan_rsp.name_is_complete = 1;
+    printf("[ADV] scan_rsp name='%s' len=%d\n", s_Para.device_name_a8, (int)scan_rsp.name_len);
     // Set scan response fields
     rc = ble_gap_adv_rsp_set_fields(&scan_rsp);
+    printf("[ADV] ble_gap_adv_rsp_set_fields rc=%d\n", rc);
     if (rc != 0) {
         return;
     }
 
     // Start advertising with the scan response
     rc = ble_gap_adv_start(blehr_addr_type, NULL, BLE_HS_FOREVER, &adv_params, blehr_gap_event, NULL);
+    printf("[ADV] ble_gap_adv_start rc=%d\n", rc);
     if (rc != 0) {
         return;
     }
+    printf("[ADV] *** ADVERTISING STARTED SUCCESSFULLY ***\n");
 }
 
 //------------------------- Enter in function BLE Actor Methods -----------------------------//
@@ -837,6 +891,8 @@ static void
 blehr_on_sync(void)
 {
     int rc;
+    printf("[SYNC] *** blehr_on_sync fired ***\n");
+
 #if CONFIG_EXAMPLE_RANDOM_ADDR
     /* Generate a non-resolvable private address. */
     ble_app_set_addr();
@@ -850,10 +906,18 @@ blehr_on_sync(void)
 #endif
 
     rc = ble_hs_id_infer_auto(0, &blehr_addr_type);
+    printf("[SYNC] ble_hs_id_infer_auto rc=%d addr_type=%d\n", rc, blehr_addr_type);
     assert(rc == 0);
 
     uint8_t addr_val[6] = {0};
     rc = ble_hs_id_copy_addr(blehr_addr_type, addr_val, NULL);
+    printf("[SYNC] BLE addr %02X:%02X:%02X:%02X:%02X:%02X adv_req=%d\n",
+           addr_val[5],addr_val[4],addr_val[3],addr_val[2],addr_val[1],addr_val[0],
+           ble_advertise_requested);
+
+    /* Stack is ready — set the flag here, not after nimble_port_freertos_init(),
+     * to avoid the race where blehr_on_sync fires before ble_stack_initialized=true */
+    ble_stack_initialized = true;
 
     /* Begin advertising only when explicitly requested */
     if (ble_advertise_requested) {
@@ -884,15 +948,16 @@ static void ble_Server_Init(void)
     int rc;
     /* Initialize NVS — it is used to store PHY calibration data */
     esp_err_t ret; //= nvs_flash_init();
+    printf("[INIT] ble_Server_Init: stack_init=%d hs_enabled=%d\n",
+           ble_stack_initialized, ble_hs_is_enabled());
     if (ble_stack_initialized && ble_hs_is_enabled()) {
+        printf("[INIT] already initialized, skipping\n");
         return;
     }
     ret = nimble_port_init();
+    printf("[INIT] nimble_port_init ret=%d\n", ret);
     if (ret != ESP_OK) {
-        MODLOG_DFLT(ERROR, "Failed to init nimble %d \n", ret);
-#ifdef ENABLE_PRINT_MSG
-        printf("\n Failed to init nimble %d \n",ret);
-#endif
+        printf("[INIT] FATAL: nimble_port_init failed ret=%d\n", ret);
         return;
     }
 
@@ -903,25 +968,25 @@ static void ble_Server_Init(void)
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
     rc = gatts_svr_init();
+    printf("[INIT] gatts_svr_init rc=%d\n", rc);
     if (rc != 0) {
-#ifdef ENABLE_PRINT_MSG
-            printf("error to gatts_svr_init\n");
-#endif
+            printf("[INIT] FATAL: gatts_svr_init failed rc=%d\n", rc);
             return;
         }
 
     /* Set the default device name */
     rc = ble_svc_gap_device_name_set(device_name);
+    printf("[INIT] ble_svc_gap_device_name_set('%s') rc=%d\n", device_name, rc);
     if (rc != 0) {
-#ifdef ENABLE_PRINT_MSG
-             printf("error to ble_svc_gap_device_name_set\n");
-#endif
+             printf("[INIT] FATAL: device_name_set failed\n");
              return;
          }
     /* Start the task */
+    printf("[INIT] calling nimble_port_freertos_init...\n");
     nimble_port_freertos_init(blehr_host_task);
     FirstEntry_bool_ble=1;
     ble_stack_initialized = true;
+    printf("[INIT] ble_Server_Init complete, ble_stack_initialized=true\n");
 }	//	ble_Init_Server
 
 static void Analyse_Response(AMessage_st* s_Message_Rx)
@@ -1210,6 +1275,12 @@ static int blehr_gap_event(struct ble_gap_event *event, void *arg)
         }
 
         conn_handle = event->connect.conn_handle;
+        if (event->connect.status == 0) {
+            bsp_on_connect(event->connect.conn_handle);
+            /* Windows BLE never initiates ATT MTU exchange — initiate it
+             * from the ESP side so both sides agree on a 512-byte MTU. */
+            ble_gattc_exchange_mtu(event->connect.conn_handle, NULL, NULL);
+        }
         break;
 
     case BLE_GAP_EVENT_DISCONNECT:
@@ -1234,6 +1305,27 @@ static int blehr_gap_event(struct ble_gap_event *event, void *arg)
 		uint64_t current_epos_sec = (uint64_t) (currentTime.tv_sec * 1000L) + (uint64_t) (currentTime.tv_usec / 1000L);
 		s_Para.Advertising_mode_u8 = 0;
 		s_Para.BLE_advert_status_time_u64  = current_epos_sec;
+
+        /* Spec §3: Status disconnected msg — send before disabling notify */
+        if (bsp_notify_enabled) {
+            cJSON *ds_root = cJSON_CreateObject();
+            cJSON *ds_msg  = cJSON_CreateObject();
+            cJSON *ds_body = cJSON_CreateObject();
+            cJSON_AddBoolToObject(ds_body, "connected", 0);
+            cJSON_AddStringToObject(ds_msg, "act", "Device");
+            cJSON_AddItemToObject(ds_msg,  "Status", ds_body);
+            cJSON_AddItemToObject(ds_root, "msg",    ds_msg);
+            char *ds_str = cJSON_PrintUnformatted(ds_root);
+            if (ds_str) {
+                bsp_send_record(BSP_CH_JSON,
+                                (const uint8_t *)ds_str,
+                                (uint32_t)strlen(ds_str));
+                free(ds_str);
+            }
+            cJSON_Delete(ds_root);
+        }
+
+        bsp_on_disconnect();
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -1254,10 +1346,63 @@ static int blehr_gap_event(struct ble_gap_event *event, void *arg)
         } else if (event->subscribe.attr_handle != hrs_hrm_handle) {
             notify_state = event->subscribe.cur_notify;
         }
+        if (event->subscribe.attr_handle == bsp_tx_val_handle) {
+            bsp_notify_enabled = (bool)event->subscribe.cur_notify;
+            printf("[BSP] notify %s\n", bsp_notify_enabled ? "enabled" : "disabled");
+
+            /* Spec §3: auto-push identity msg immediately after client subscribes */
+            if (bsp_notify_enabled) {
+                cJSON *root_j    = cJSON_CreateObject();
+                cJSON *msg_j     = cJSON_CreateObject();
+                cJSON *identity  = cJSON_CreateObject();
+                cJSON_AddStringToObject(identity, "protocolVersion", "1.0");
+                cJSON_AddStringToObject(identity, "deviceName",
+                    device_name[0] ? device_name : DEVICE_FULL_NAME);
+                cJSON_AddStringToObject(identity, "firmwareVersion",
+                    Device_Fw_Ver[0] ? (char *)Device_Fw_Ver : "unknown");
+                char eth_mac_push[24] = "N/A";
+                eth_actor_get("MAC_ADD", eth_mac_push, sizeof(eth_mac_push));
+                cJSON_AddStringToObject(identity, "ethernetMAC", eth_mac_push);
+                char wifi_mac_push[24] = "N/A";
+                wifi_actor_get("MAC_ADD", wifi_mac_push, sizeof(wifi_mac_push));
+                cJSON_AddStringToObject(identity, "wifiMAC", wifi_mac_push);
+                cJSON_AddStringToObject(msg_j,  "act",      "Device");
+                cJSON_AddItemToObject(msg_j,    "Identity", identity);
+                cJSON_AddItemToObject(root_j,   "msg",      msg_j);
+                char *push_str = cJSON_PrintUnformatted(root_j);
+                if (push_str) {
+                    printf("[BSP] → Identity push\n");
+                    bsp_send_record(BSP_CH_JSON,
+                                    (const uint8_t *)push_str,
+                                    (uint32_t)strlen(push_str));
+                    free(push_str);
+                }
+                cJSON_Delete(root_j);
+
+                /* Spec §3: Status connected msg */
+                cJSON *st_root = cJSON_CreateObject();
+                cJSON *st_msg  = cJSON_CreateObject();
+                cJSON *st_body = cJSON_CreateObject();
+                cJSON_AddBoolToObject(st_body, "connected", 1);
+                cJSON_AddStringToObject(st_msg, "act", "Device");
+                cJSON_AddItemToObject(st_msg,  "Status", st_body);
+                cJSON_AddItemToObject(st_root, "msg",    st_msg);
+                char *st_str = cJSON_PrintUnformatted(st_root);
+                if (st_str) {
+                    bsp_send_record(BSP_CH_JSON,
+                                    (const uint8_t *)st_str,
+                                    (uint32_t)strlen(st_str));
+                    free(st_str);
+                }
+                cJSON_Delete(st_root);
+            }
+        }
         ESP_LOGI("BLE_GAP_SUBSCRIBE_EVENT", "conn_handle from subscribe=%d", conn_handle);
         break;
 
     case BLE_GAP_EVENT_MTU:
+        printf("[MTU] exchange complete conn=%d mtu=%d\n",
+               event->mtu.conn_handle, event->mtu.value);
     	sprintf(str,"mtu update event, MTU value = %d ",event->mtu.value);
     	Add_Response_msg(str,&s_Message_Tx_new,payLoadData_event);
     	 rc = ble_att_set_preferred_mtu(event->mtu.value);   //PREFERRED_MTU_VALUE
@@ -1600,3 +1745,507 @@ static void Stop_BLE_Advertising(AMessage_st* s_Message_Rx)
 	Send_CMD_To_Other_Actor(LED, "LED", "\0", 0 , "STOP_BLE_LED");
 }
 //--------------------------- BLE Actor Methods Ends ------------------------------//
+
+/* ── OTA.Chunk state (persists across calls) ─────────────────────────────── */
+static esp_ota_handle_t         s_ota_handle        = 0;
+static const esp_partition_t   *s_ota_partition     = NULL;
+static int                      s_ota_seq_expected  = 0;
+static bool                     s_ota_active        = false;
+static uint8_t                  s_ota_chunk_buf[512];
+
+static int s_hex_decode(const char *hex, uint8_t *out, size_t max)
+{
+    size_t hlen = strlen(hex);
+    if (hlen & 1u) return -1;
+    size_t n = hlen / 2;
+    if (n > max) return -1;
+    for (size_t i = 0; i < n; i++) {
+        uint8_t hi = (uint8_t)hex[2*i],  lo = (uint8_t)hex[2*i+1];
+#define H(c) ((c)>='0'&&(c)<='9'?(c)-'0':(c)>='a'&&(c)<='f'?(c)-'a'+10:(c)>='A'&&(c)<='F'?(c)-'A'+10:-1)
+        int bh = H(hi), bl = H(lo);
+#undef H
+        if (bh < 0 || bl < 0) return -1;
+        out[i] = (uint8_t)((bh << 4) | bl);
+    }
+    return (int)n;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * BSP JSON channel handler — overrides weak stub in bsp.c
+ *
+ * Handles two JSON command formats:
+ *   Blackbird:    {"cmd":{"act":"Device","Identify":{}},"mID":N}
+ *   Python tool:  {"identifyDevice":1}
+ *
+ * All other commands are forwarded to Bledataparsing() (the existing
+ * console-actor dispatch path) as a best-effort passthrough.
+ * ══════════════════════════════════════════════════════════════════════════════ */
+void bsp_handle_json(const uint8_t *payload, uint32_t len)
+{
+    if (!payload || len == 0) return;
+
+    char *str = heap_caps_malloc(len + 1u, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!str) {
+        printf("[BSP] bsp_handle_json OOM\n");
+        return;
+    }
+    memcpy(str, payload, len);
+    str[len] = '\0';
+    printf("[BSP] JSON rx (%lu B): %s\n", (unsigned long)len, str);
+
+    cJSON *root = cJSON_Parse(str);
+    if (!root) {
+        printf("[BSP] JSON parse error\n");
+        free(str);
+        return;
+    }
+
+    /* Extract mID (0 when absent — e.g. Python debug tool) */
+    int mid = 0;
+    cJSON *mid_j = cJSON_GetObjectItem(root, "mID");
+    if (mid_j && cJSON_IsNumber(mid_j)) mid = (int)mid_j->valuedouble;
+
+    bool handled = false;
+
+    /* ── Blackbird format: {"cmd":{"act":"<actor>","<method>":{}},"mID":N} ── */
+    cJSON *cmd_j = cJSON_GetObjectItem(root, "cmd");
+    if (cmd_j && cJSON_IsObject(cmd_j)) {
+        cJSON *act_j = cJSON_GetObjectItem(cmd_j, "act");
+        if (act_j && cJSON_IsString(act_j)) {
+            const char *act = act_j->valuestring;
+
+            /* ── Phase 4: get / set routing (any actor) ───────────────────── */
+            cJSON *get_j = cJSON_GetObjectItem(cmd_j, "get");
+            cJSON *set_j = cJSON_GetObjectItem(cmd_j, "set");
+
+            /* Resolve getter/setter BEFORE deciding whether to handle (#7) */
+            bool (*ag)(const char *, char *, size_t) = NULL;
+            bool (*as)(const char *, const char *)   = NULL;
+            if      (strcmp(act, "BLE")    == 0) { ag = ble_actor_get;    as = ble_actor_set; }
+            else if (strcmp(act, "WIFI")   == 0) { ag = wifi_actor_get;   as = wifi_actor_set; }
+            else if (strcmp(act, "ETH")    == 0) { ag = eth_actor_get;    as = eth_actor_set; }
+            else if (strcmp(act, "NTP")    == 0) { ag = ntp_actor_get;    as = ntp_actor_set; }
+            else if (strcmp(act, "UART")   == 0) { ag = uart_actor_get;   as = uart_actor_set; }
+            else if (strcmp(act, "SYSTEM") == 0) { ag = system_actor_get; as = system_actor_set; }
+            else if (is_m225_sub_actor(act))      { m225_set_menu_ctx(act); ag = m225_actor_get; as = m225_actor_set; }
+
+            bool has_getset = (get_j && cJSON_IsArray(get_j)) ||
+                              (set_j && cJSON_IsObject(set_j));
+
+            if (has_getset && ag != NULL) {
+                /* ── Known actor: handle get/set ─────────────────────────── */
+                handled = true;
+
+                cJSON *resp     = cJSON_CreateObject();
+                cJSON *ack_body = cJSON_CreateObject();
+                cJSON_AddStringToObject(ack_body, "act", act);
+                /* Accumulate all set-failure messages (#11) */
+                char warn_msgs[512] = {0};
+
+                /* ── get ── */
+                if (get_j && cJSON_IsArray(get_j)) {
+                    cJSON *get_res = cJSON_CreateObject();
+                    int n = cJSON_GetArraySize(get_j);
+                    for (int i = 0; i < n; i++) {
+                        cJSON *k = cJSON_GetArrayItem(get_j, i);
+                        if (!cJSON_IsString(k)) continue;
+                        char val[256] = {0};
+                        ag(k->valuestring, val, sizeof(val));
+                        cJSON_AddStringToObject(get_res, k->valuestring, val);
+                    }
+                    cJSON_AddItemToObject(ack_body, "get", get_res);
+                }
+
+                /* ── set ── */
+                if (set_j && cJSON_IsObject(set_j)) {
+                    cJSON *set_res = cJSON_CreateObject();
+                    cJSON *kv = set_j->child;
+                    while (kv) {
+                        const char *key = kv->string;
+                        char val_str[256] = {0};
+                        if      (cJSON_IsString(kv)) snprintf(val_str, sizeof(val_str), "%s", kv->valuestring);
+                        else if (cJSON_IsNumber(kv)) snprintf(val_str, sizeof(val_str), "%g", kv->valuedouble);
+                        else if (cJSON_IsBool(kv))   snprintf(val_str, sizeof(val_str), "%d", cJSON_IsTrue(kv));
+
+                        bool ok = as ? as(key, val_str) : false;
+                        if (!ok) {
+                            /* Append to warn message buffer (#11) */
+                            if (warn_msgs[0]) strncat(warn_msgs, "; ", sizeof(warn_msgs) - strlen(warn_msgs) - 1);
+                            char ws[128];
+                            snprintf(ws, sizeof(ws), "%s.%s read-only or unknown", act, key);
+                            strncat(warn_msgs, ws, sizeof(warn_msgs) - strlen(warn_msgs) - 1);
+                        }
+                        cJSON_AddStringToObject(set_res, key, val_str);
+                        kv = kv->next;
+                    }
+                    cJSON_AddItemToObject(ack_body, "set", set_res);
+                }
+
+                /* warn goes INSIDE ack_body per spec §8 (#2) */
+                if (warn_msgs[0]) {
+                    cJSON *warn_j = cJSON_CreateObject();
+                    cJSON_AddStringToObject(warn_j, "severity", "warn");
+                    cJSON_AddStringToObject(warn_j, "string",   warn_msgs);
+                    cJSON_AddItemToObject(ack_body, "warn", warn_j);
+                }
+                cJSON_AddItemToObject(resp, "ack", ack_body);
+                cJSON_AddNumberToObject(resp, "mID", mid);
+
+                char *rs = cJSON_PrintUnformatted(resp);
+                if (rs) {
+                    printf("[BSP] → get/set ack act=%s mID=%d\n", act, mid);
+                    bsp_send_record(BSP_CH_JSON, (const uint8_t *)rs, (uint32_t)strlen(rs));
+                    free(rs);
+                }
+                cJSON_Delete(resp);
+
+            } else if (has_getset && ag == NULL &&
+                       strcmp(act, "Device") != 0 &&
+                       strcmp(act, "MENU")   != 0 &&
+                       strcmp(act, "SpeedTest") != 0) {
+                /* ── Unknown actor with get/set: return error ack (#10) ─── */
+                handled = true;
+                cJSON *resp     = cJSON_CreateObject();
+                cJSON *ack_body = cJSON_CreateObject();
+                cJSON_AddStringToObject(ack_body, "act", act);
+                cJSON *warn_j   = cJSON_CreateObject();
+                char ws[128];
+                snprintf(ws, sizeof(ws), "actor '%s' not supported for get/set", act);
+                cJSON_AddStringToObject(warn_j, "severity", "error");
+                cJSON_AddStringToObject(warn_j, "string",   ws);
+                cJSON_AddItemToObject(ack_body, "warn", warn_j);
+                cJSON_AddItemToObject(resp, "ack", ack_body);
+                cJSON_AddNumberToObject(resp, "mID", mid);
+                char *rs = cJSON_PrintUnformatted(resp);
+                if (rs) {
+                    bsp_send_record(BSP_CH_JSON, (const uint8_t *)rs, (uint32_t)strlen(rs));
+                    free(rs);
+                }
+                cJSON_Delete(resp);
+            }
+
+            /* ── Phase 5: MENU routing ─────────────────────────────────────── */
+            if (!handled && strcmp(act, "MENU") == 0) {
+                /* Find the method key (first non-"act" key in cmd_j) */
+                const char *method = NULL;
+                cJSON *kj = cmd_j->child;
+                while (kj) {
+                    if (strcmp(kj->string, "act") != 0) { method = kj->string; break; }
+                    kj = kj->next;
+                }
+                if (method) {
+                    handled = true;
+                    cJSON *items = menu_dispatch(method);
+                    cJSON *resp     = cJSON_CreateObject();
+                    cJSON *ack_body = cJSON_CreateObject();
+                    cJSON_AddStringToObject(ack_body, "act", "MENU");
+                    if (items) {
+                        cJSON_AddItemToObject(ack_body, method, items);
+                    } else {
+                        /* Unknown actor name — return empty array + warn */
+                        cJSON_AddItemToObject(ack_body, method, cJSON_CreateArray());
+                        cJSON *w = cJSON_CreateObject();
+                        cJSON_AddStringToObject(w, "severity", "warn");
+                        char ws[128];
+                        snprintf(ws, sizeof(ws), "MENU actor '%s' not found", method);
+                        cJSON_AddStringToObject(w, "string", ws);
+                        cJSON_AddItemToObject(ack_body, "warn", w);  /* inside ack per spec §8 */
+                    }
+                    cJSON_AddItemToObject(resp, "ack", ack_body);
+                    cJSON_AddNumberToObject(resp, "mID", mid);
+                    char *rs = cJSON_PrintUnformatted(resp);
+                    if (rs) {
+                        printf("[BSP] → MENU.%s ack mID=%d\n", method, mid);
+                        bsp_send_record(BSP_CH_JSON, (const uint8_t *)rs, (uint32_t)strlen(rs));
+                        free(rs);
+                    }
+                    cJSON_Delete(resp);
+                }
+            }
+
+            if (!handled && strcmp(act_j->valuestring, "Device") == 0) {
+                /* ── Device.Identify ──────────────────────────────────────── */
+                cJSON *identify_j = cJSON_GetObjectItem(cmd_j, "Identify");
+                if (identify_j) {
+                    handled = true;
+
+                    cJSON *resp     = cJSON_CreateObject();
+                    cJSON *ack_obj  = cJSON_CreateObject();
+                    cJSON *identity = cJSON_CreateObject();
+
+                    cJSON_AddStringToObject(identity, "protocolVersion", "1.0");
+                    cJSON_AddStringToObject(identity, "deviceName",
+                        device_name[0] ? device_name : DEVICE_FULL_NAME);
+                    cJSON_AddStringToObject(identity, "firmwareVersion",
+                        Device_Fw_Ver[0] ? (char *)Device_Fw_Ver : "unknown");
+                    char eth_mac_ack[24] = "N/A";
+                    eth_actor_get("MAC_ADD", eth_mac_ack, sizeof(eth_mac_ack));
+                    cJSON_AddStringToObject(identity, "ethernetMAC", eth_mac_ack);
+                    char wifi_mac_ack[24] = "N/A";
+                    wifi_actor_get("MAC_ADD", wifi_mac_ack, sizeof(wifi_mac_ack));
+                    cJSON_AddStringToObject(identity, "wifiMAC", wifi_mac_ack);
+
+                    cJSON_AddStringToObject(ack_obj, "act",      "Device");
+                    cJSON_AddItemToObject(ack_obj,   "Identify", identity);
+                    cJSON_AddItemToObject(resp,      "ack",      ack_obj);
+                    cJSON_AddNumberToObject(resp,    "mID",      mid);
+
+                    char *resp_str = cJSON_PrintUnformatted(resp);
+                    if (resp_str) {
+                        printf("[BSP] → Identity ack mID=%d\n", mid);
+                        bsp_send_record(BSP_CH_JSON,
+                                        (const uint8_t *)resp_str,
+                                        (uint32_t)strlen(resp_str));
+                        free(resp_str);
+                    }
+                    cJSON_Delete(resp);
+                }
+
+            } else if (strcmp(act_j->valuestring, "SpeedTest") == 0) {
+                /* ── SpeedTest ops: start / disarm / arm / end ───────────── */
+                cJSON *op_j = cJSON_GetObjectItem(cmd_j, "op");
+                if (op_j && cJSON_IsString(op_j)) {
+                    const char *op = op_j->valuestring;
+                    handled = true;
+
+                    cJSON *resp = cJSON_CreateObject();
+
+                    if (strcmp(op, "start") == 0) {
+                        g_bsp_bench.rx_bytes       = 0;
+                        g_bsp_bench.crc32          = 0;
+                        g_bsp_bench.armed          = false;
+                        g_bsp_bench.active         = true;
+                        cJSON *sz_j = cJSON_GetObjectItem(cmd_j, "size");
+                        g_bsp_bench.expected_bytes = (sz_j && cJSON_IsNumber(sz_j))
+                                                     ? (uint32_t)sz_j->valuedouble : 0;
+                        printf("[BENCH] start expected=%lu\n",
+                               (unsigned long)g_bsp_bench.expected_bytes);
+                        cJSON_AddItemToObject(resp, "ack", cJSON_CreateObject());
+                        cJSON_AddNumberToObject(resp, "mID", mid);
+
+                    } else if (strcmp(op, "disarm") == 0) {
+                        g_bsp_bench.armed = false;
+                        printf("[BENCH] disarmed\n");
+                        cJSON_AddItemToObject(resp, "ack", cJSON_CreateObject());
+                        cJSON_AddNumberToObject(resp, "mID", mid);
+
+                    } else if (strcmp(op, "arm") == 0) {
+                        g_bsp_bench.armed = true;
+                        printf("[BENCH] armed\n");
+                        cJSON_AddItemToObject(resp, "ack", cJSON_CreateObject());
+                        cJSON_AddNumberToObject(resp, "mID", mid);
+
+                    } else if (strcmp(op, "end") == 0) {
+                        g_bsp_bench.armed  = false;
+                        g_bsp_bench.active = false;
+                        bool crc_match = (g_bsp_bench.expected_bytes == 0) ||
+                                         (g_bsp_bench.rx_bytes == g_bsp_bench.expected_bytes);
+                        printf("[BENCH] end rx=%lu/%lu crc_match=%d\n",
+                               (unsigned long)g_bsp_bench.rx_bytes,
+                               (unsigned long)g_bsp_bench.expected_bytes,
+                               (int)crc_match);
+                        cJSON_AddBoolToObject(resp,   "ack",       1);
+                        cJSON_AddNumberToObject(resp, "rx_bytes",  (double)g_bsp_bench.rx_bytes);
+                        cJSON_AddBoolToObject(resp,   "crc_match", (int)crc_match);
+                        cJSON_AddNumberToObject(resp, "mID",       mid);
+
+                    } else {
+                        handled = false;
+                    }
+
+                    if (handled) {
+                        char *resp_str = cJSON_PrintUnformatted(resp);
+                        if (resp_str) {
+                            printf("[BENCH] → ack mID=%d op=%s\n", mid, op);
+                            bsp_send_record(BSP_CH_JSON,
+                                            (const uint8_t *)resp_str,
+                                            (uint32_t)strlen(resp_str));
+                            free(resp_str);
+                        }
+                    }
+                    cJSON_Delete(resp);
+                }
+
+            } else if (strcmp(act_j->valuestring, "OTA") == 0) {
+                /* ── OTA.Chunk: spec §9.4 BLE firmware update ───────────── */
+                cJSON *chunk_j = cJSON_GetObjectItem(cmd_j, "Chunk");
+                if (chunk_j) {
+                    handled = true;
+                    cJSON *seq_j   = cJSON_GetObjectItem(chunk_j, "seq");
+                    cJSON *total_j = cJSON_GetObjectItem(chunk_j, "total");
+                    cJSON *data_j  = cJSON_GetObjectItem(chunk_j, "data");
+
+                    const char *ota_err = NULL;
+
+                    if (!seq_j || !cJSON_IsNumber(seq_j) ||
+                        !total_j || !cJSON_IsNumber(total_j) ||
+                        !data_j  || !cJSON_IsString(data_j)) {
+                        ota_err = "Missing seq/total/data fields";
+                    } else {
+                        int seq   = (int)seq_j->valuedouble;
+                        int total = (int)total_j->valuedouble;
+
+                        if (seq == 0) {
+                            if (s_ota_active) {
+                                esp_ota_abort(s_ota_handle);
+                                s_ota_active = false;
+                            }
+                            s_ota_partition = esp_ota_get_next_update_partition(NULL);
+                            if (!s_ota_partition) {
+                                ota_err = "No OTA partition";
+                            } else {
+                                esp_err_t e = esp_ota_begin(s_ota_partition,
+                                                            OTA_SIZE_UNKNOWN,
+                                                            &s_ota_handle);
+                                if (e != ESP_OK) {
+                                    ota_err = "esp_ota_begin failed";
+                                } else {
+                                    s_ota_active       = true;
+                                    s_ota_seq_expected = 0;
+                                    printf("[OTA] begin total=%d\n", total);
+                                }
+                            }
+                        }
+
+                        if (!ota_err) {
+                            if (!s_ota_active) {
+                                ota_err = "OTA session not active";
+                            } else if (seq != s_ota_seq_expected) {
+                                ota_err = "OTA seq out of order";
+                            } else {
+                                int n = s_hex_decode(data_j->valuestring,
+                                                     s_ota_chunk_buf,
+                                                     sizeof(s_ota_chunk_buf));
+                                if (n < 0) {
+                                    ota_err = "Hex decode failed";
+                                } else {
+                                    esp_err_t e = esp_ota_write(s_ota_handle,
+                                                                s_ota_chunk_buf,
+                                                                (size_t)n);
+                                    if (e != ESP_OK) {
+                                        ota_err = "esp_ota_write failed";
+                                    } else {
+                                        s_ota_seq_expected++;
+                                    }
+                                }
+                            }
+                        }
+
+                        /* Build ack (always send, even on error) */
+                        cJSON *ota_resp = cJSON_CreateObject();
+                        cJSON *ota_ack  = cJSON_CreateObject();
+                        cJSON *ota_res  = cJSON_CreateObject();
+                        cJSON_AddStringToObject(ota_ack, "act", "OTA");
+                        cJSON_AddNumberToObject(ota_res, "seq", seq);
+                        cJSON_AddItemToObject(ota_ack, "Chunk", ota_res);
+                        if (ota_err) {
+                            cJSON *w = cJSON_CreateObject();
+                            cJSON_AddStringToObject(w, "severity", "error");
+                            cJSON_AddStringToObject(w, "string",   ota_err);
+                            cJSON_AddItemToObject(ota_ack, "warn", w);
+                            s_ota_active = false;
+                            printf("[OTA] error seq=%d: %s\n", seq, ota_err);
+                        }
+                        cJSON_AddItemToObject(ota_resp, "ack", ota_ack);
+                        cJSON_AddNumberToObject(ota_resp, "mID", mid);
+
+                        char *ota_str = cJSON_PrintUnformatted(ota_resp);
+                        if (ota_str) {
+                            bsp_send_record(BSP_CH_JSON,
+                                            (const uint8_t *)ota_str,
+                                            (uint32_t)strlen(ota_str));
+                            free(ota_str);
+                        }
+                        cJSON_Delete(ota_resp);
+
+                        /* Final chunk: validate, set boot partition, restart */
+                        if (!ota_err && seq == total - 1) {
+                            printf("[OTA] finalising...\n");
+                            if (esp_ota_end(s_ota_handle) == ESP_OK &&
+                                s_ota_partition != NULL) {
+                                esp_ota_set_boot_partition(s_ota_partition);
+                                vTaskDelay(pdMS_TO_TICKS(500));
+                                esp_restart();
+                            }
+                            s_ota_active = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* ── Python debug tool format: {"identifyDevice":1} ─────────────────── */
+    if (!handled && cJSON_GetObjectItem(root, "identifyDevice")) {
+        handled = true;
+
+        cJSON *resp     = cJSON_CreateObject();
+        cJSON *identity = cJSON_CreateObject();
+
+        cJSON_AddStringToObject(identity, "protocolVersion", "1.0");
+        cJSON_AddStringToObject(identity, "deviceName",
+            device_name[0] ? device_name : DEVICE_FULL_NAME);
+        cJSON_AddStringToObject(identity, "firmwareVersion",
+            Device_Fw_Ver[0] ? (char *)Device_Fw_Ver : "unknown");
+        char eth_mac_dbg[24] = "N/A";
+        eth_actor_get("MAC_ADD", eth_mac_dbg, sizeof(eth_mac_dbg));
+        cJSON_AddStringToObject(identity, "ethernetMAC", eth_mac_dbg);
+        char wifi_mac_dbg[24] = "N/A";
+        wifi_actor_get("MAC_ADD", wifi_mac_dbg, sizeof(wifi_mac_dbg));
+        cJSON_AddStringToObject(identity, "wifiMAC", wifi_mac_dbg);
+
+        cJSON_AddItemToObject(resp, "Identity", identity);
+
+        char *resp_str = cJSON_PrintUnformatted(resp);
+        if (resp_str) {
+            printf("[BSP] → identifyDevice\n");
+            bsp_send_record(BSP_CH_JSON,
+                            (const uint8_t *)resp_str,
+                            (uint32_t)strlen(resp_str));
+            free(resp_str);
+        }
+        cJSON_Delete(resp);
+    }
+
+    /* ── Fallback: forward other cmd-format JSON to console actor ────────── */
+    if (!handled && cmd_j) {
+        Bledataparsing(str);
+    }
+
+    cJSON_Delete(root);
+    free(str);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+ * bsp_handle_bench — bench channel (0x04) data accumulator.
+ * Only counts bytes when armed via SpeedTest JSON commands above.
+ * CRC32: poly=0xEDB88320, init=0, no final XOR (same as file-transfer CRC).
+ * ══════════════════════════════════════════════════════════════════════════════ */
+void bsp_handle_bench(const uint8_t *payload, uint32_t len)
+{
+    if (!g_bsp_bench.armed || !payload || len == 0) return;
+    g_bsp_bench.rx_bytes += len;
+    for (uint32_t i = 0; i < len; i++) {
+        g_bsp_bench.crc32 ^= payload[i];
+        for (int b = 0; b < 8; b++) {
+            g_bsp_bench.crc32 = (g_bsp_bench.crc32 >> 1)
+                                 ^ (0xEDB88320u & (-(g_bsp_bench.crc32 & 1u)));
+        }
+    }
+}
+
+/* ── BLE actor public property accessors (for menu_builder + get/set) ───── */
+bool ble_actor_get(const char *name, char *val_out, size_t max_len)
+{
+    if (!name || !val_out || max_len == 0) return false;
+    val_out[0] = '\0';
+    get((char *)name, val_out);
+    return val_out[0] != '\0';
+}
+
+bool ble_actor_set(const char *name, const char *val_in)
+{
+    if (!name || !val_in) return false;
+    /* BLE actor set() takes AMessage_st* but only uses it for CONN_MODE timestamp — pass NULL */
+    return set((char *)name, (char *)val_in, NULL) == 1;
+}

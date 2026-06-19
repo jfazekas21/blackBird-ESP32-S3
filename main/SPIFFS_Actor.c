@@ -14,6 +14,7 @@
 #include "esp_partition.h"
 #include "esp_app_desc.h"
 #include "esp_ota_ops.h"
+#include "device_config.h"
 //----------------------------- Actor Tags ---------------------------------------//
 
 static const char 	* THIS_ACTOR 	= "SPIFFS";
@@ -26,7 +27,7 @@ static const char 	THIS_ACTOR_ID 	= 	SPIFFS;  // assign src id
 #define SPIFFS_MOUNT_RETRY_DELAY_MS 2000
 #define SPIFFS_MOUNT_MAX_RETRIES 10
 #define	BOOTLOADER_VERSION	"0.22"
-#define	MANUFACTURER_NAME	"HAVEN"
+#define	MANUFACTURER_NAME	DEVICE_COMPANY
 #define	MANUFACTURER_DATE	"1st February 2025"
 
 #if defined(B480)
