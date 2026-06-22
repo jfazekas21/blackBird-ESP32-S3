@@ -2172,6 +2172,28 @@ void bsp_handle_json(const uint8_t *payload, uint32_t len)
                     }
                 }
             }
+
+            /* ── Spec §5: unhandled cmd with mID → err container ─────────── *
+             * Covers: unknown actor name, known actor with unknown method.    *
+             * mID absent → fire-and-forget, no reply expected.               */
+            if (!handled && mid != 0) {
+                handled = true;
+                cJSON *resp     = cJSON_CreateObject();
+                cJSON *err_body = cJSON_CreateObject();
+                cJSON_AddStringToObject(err_body, "act",       act);
+                cJSON_AddNumberToObject(err_body, "errorCode", 404);
+                cJSON_AddStringToObject(err_body, "reason",    "actor or method not found");
+                cJSON_AddItemToObject(resp, "err", err_body);
+                cJSON_AddNumberToObject(resp, "mID", mid);
+                char *rs = cJSON_PrintUnformatted(resp);
+                if (rs) {
+                    printf("[BSP] → err act=%s mID=%d reason=not-found\n", act, mid);
+                    bsp_send_record(BSP_CH_JSON,
+                                    (const uint8_t *)rs, (uint32_t)strlen(rs));
+                    free(rs);
+                }
+                cJSON_Delete(resp);
+            }
         }
     }
 
