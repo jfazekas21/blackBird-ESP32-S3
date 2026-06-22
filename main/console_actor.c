@@ -6,7 +6,6 @@
  */
 
 //-----------Includes Actors------//
-#include <trimLightActor.h>
 #include "Web_server_Actor.h"
 #include "actor.h"
 #include "console_Actor.h"
@@ -33,7 +32,6 @@
 #include "SYSTEM_Actor.h"
 #include "EVENT_Actor.h"
 #include "System_Files_Actor.h"
-#include "B394_DigitalInput.h"
 #include "195_Actor.h"
 #include "Config.h"
 #include "pcf8563.h"
@@ -2290,10 +2288,6 @@ static void InitActors(void *pvParameters __attribute__((unused))) {
 	Send_CMD_To_Other_Actor(SYSTEM, "SYSTEM", "\0", 0, "INIT"); //Speed-up
 	Send_CMD_To_Other_Actor(LED, "LED", "\0", 0, "INIT");
 	Send_CMD_To_Other_Actor(PUSHBUTTON, "PUSHBUTTON", "\0", 0, "INIT");
-#if defined(B394)
-	B394_DigitalInput_Init();  /* Create B394_DI actor queue and monitor */
-	Send_CMD_To_Other_Actor(B394_DI, "B394_DI", "\0", 0, "INIT");
-#endif
 	Send_CMD_To_Other_Actor(BLE, "BLE", "\0", 0, "INIT");
 	Send_CMD_To_Other_Actor(NTP, "NTP", "\0", 0, "INIT");
 	vTaskDelay(15000 / portTICK_PERIOD_MS);   //This delay is given to initialize light actor after Ihub connection (to avoid light flickering)

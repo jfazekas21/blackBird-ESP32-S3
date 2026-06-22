@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <trimLightActor.h>
 #include "esp_check.h"
 #include "led_strip_encoder.h"
 #include "esp_heap_caps.h"
