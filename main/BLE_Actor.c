@@ -12,6 +12,7 @@
 #include "esp_bt.h"
 #include "base64/base64.h"
 #include "BLE_Actor.h"
+#include "ble_security.h"
 #include "esp_log.h"
 #include "string.h"
 #include "stdint.h"
@@ -40,6 +41,8 @@
 #include "bsp.h"
 #include "menu_builder.h"
 #include "device_config.h"
+#include "m225_methods.h"
+#include "ble_comms_push.h"
 
 /* ── Actor property accessors — public wrappers in each actor .c ─────────── */
 extern bool wifi_actor_get  (const char *name, char *val_out, size_t max_len);
@@ -918,8 +921,8 @@ blehr_on_sync(void)
     /* Stack is ready — set the flag here, not after nimble_port_freertos_init(),
      * to avoid the race where blehr_on_sync fires before ble_stack_initialized=true */
     ble_stack_initialized = true;
-
-    /* Begin advertising only when explicitly requested */
+    ble_comms_telemetry_start();
+    ble_security_init();
     if (ble_advertise_requested) {
         blehr_advertise();
         s_Para.Advertising_mode_u8 = 1;
@@ -1751,7 +1754,7 @@ static esp_ota_handle_t         s_ota_handle        = 0;
 static const esp_partition_t   *s_ota_partition     = NULL;
 static int                      s_ota_seq_expected  = 0;
 static bool                     s_ota_active        = false;
-static uint8_t                  s_ota_chunk_buf[512];
+static uint8_t                  s_ota_chunk_buf[200];
 
 static int s_hex_decode(const char *hex, uint8_t *out, size_t max)
 {
@@ -1860,22 +1863,31 @@ void bsp_handle_json(const uint8_t *payload, uint32_t len)
                 if (set_j && cJSON_IsObject(set_j)) {
                     cJSON *set_res = cJSON_CreateObject();
                     cJSON *kv = set_j->child;
+                    if (is_m225_sub_actor(act)) m225_clamp_begin();
                     while (kv) {
                         const char *key = kv->string;
                         char val_str[256] = {0};
+                        char applied[256] = {0};
                         if      (cJSON_IsString(kv)) snprintf(val_str, sizeof(val_str), "%s", kv->valuestring);
                         else if (cJSON_IsNumber(kv)) snprintf(val_str, sizeof(val_str), "%g", kv->valuedouble);
                         else if (cJSON_IsBool(kv))   snprintf(val_str, sizeof(val_str), "%d", cJSON_IsTrue(kv));
 
                         bool ok = as ? as(key, val_str) : false;
+                        if (ag && ag(key, applied, sizeof(applied))) {
+                            cJSON_AddStringToObject(set_res, key, applied);
+                        } else {
+                            cJSON_AddStringToObject(set_res, key, val_str);
+                        }
                         if (!ok) {
-                            /* Append to warn message buffer (#11) */
                             if (warn_msgs[0]) strncat(warn_msgs, "; ", sizeof(warn_msgs) - strlen(warn_msgs) - 1);
                             char ws[128];
                             snprintf(ws, sizeof(ws), "%s.%s read-only or unknown", act, key);
                             strncat(warn_msgs, ws, sizeof(warn_msgs) - strlen(warn_msgs) - 1);
+                        } else if (is_m225_sub_actor(act) && m225_set_was_clamped()) {
+                            if (warn_msgs[0]) strncat(warn_msgs, "; ", sizeof(warn_msgs) - strlen(warn_msgs) - 1);
+                            strncat(warn_msgs, m225_set_clamp_message(),
+                                    sizeof(warn_msgs) - strlen(warn_msgs) - 1);
                         }
-                        cJSON_AddStringToObject(set_res, key, val_str);
                         kv = kv->next;
                     }
                     cJSON_AddItemToObject(ack_body, "set", set_res);
@@ -1886,6 +1898,11 @@ void bsp_handle_json(const uint8_t *payload, uint32_t len)
                     cJSON *warn_j = cJSON_CreateObject();
                     cJSON_AddStringToObject(warn_j, "severity", "warn");
                     cJSON_AddStringToObject(warn_j, "string",   warn_msgs);
+                    cJSON_AddItemToObject(ack_body, "warn", warn_j);
+                } else if (is_m225_sub_actor(act) && m225_set_was_clamped()) {
+                    cJSON *warn_j = cJSON_CreateObject();
+                    cJSON_AddStringToObject(warn_j, "severity", "warn");
+                    cJSON_AddStringToObject(warn_j, "string",   m225_set_clamp_message());
                     cJSON_AddItemToObject(ack_body, "warn", warn_j);
                 }
                 cJSON_AddItemToObject(resp, "ack", ack_body);
@@ -2170,6 +2187,42 @@ void bsp_handle_json(const uint8_t *payload, uint32_t len)
                             s_ota_active = false;
                         }
                     }
+                }
+            }
+
+            /* ── m225 method dispatch (Appendix A methods) ─────────────────── */
+            if (!handled && mid != 0 && is_m225_sub_actor(act)) {
+                const char *method = NULL;
+                cJSON *params = NULL;
+                cJSON *mj = cmd_j->child;
+                while (mj) {
+                    if (strcmp(mj->string, "act") != 0 &&
+                        strcmp(mj->string, "get") != 0 &&
+                        strcmp(mj->string, "set") != 0) {
+                        method = mj->string;
+                        params = mj;
+                        break;
+                    }
+                    mj = mj->next;
+                }
+                if (method) {
+                    m225_set_menu_ctx(act);
+                    cJSON *resp     = cJSON_CreateObject();
+                    cJSON *ack_body = cJSON_CreateObject();
+                    if (m225_dispatch_method(act, method, params, ack_body, mid)) {
+                        handled = true;
+                        cJSON_AddItemToObject(resp, "ack", ack_body);
+                        cJSON_AddNumberToObject(resp, "mID", mid);
+                        char *rs = cJSON_PrintUnformatted(resp);
+                        if (rs) {
+                            printf("[BSP] → method %s.%s mID=%d\n", act, method, mid);
+                            bsp_send_record(BSP_CH_JSON, (const uint8_t *)rs, (uint32_t)strlen(rs));
+                            free(rs);
+                        }
+                    } else {
+                        cJSON_Delete(ack_body);
+                    }
+                    cJSON_Delete(resp);
                 }
             }
 

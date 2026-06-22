@@ -8,7 +8,8 @@
 
 idf_component_register(SRCS "wifi_actor.c" "console_actor.c" "B394_DigitalInput.c" "main.c" "console_Actor.c" "UART_Actor.c" "wifi_Actor.c" "File_Manager_Actor.c" "195_Actor.c"
 							"SD_Card_Actor.c" "JFS_FLASH_Actor.c" "HTTP_Actor.c" "LED_Actor.c" "Pushbutton_Actor.c"
-							"iHub_Actor.c" "BLE_Actor.c" "ble/gatt_service.c" "ble/bsp.c" "ble/menu_builder.c" "NTP_Actor.c"
+							"iHub_Actor.c" "BLE_Actor.c" "ble/gatt_service.c" "ble/bsp.c" "ble/bsp_file.c" "ble/menu_builder.c"
+							"ble/m225_methods.c" "ble/ble_comms_push.c" "ble/nxp_bridge.c" "ble/ble_security.c" "NTP_Actor.c"
 							 "SMTP_Actor.c" "base64/base64.c"  "ping/ping.c" "UDP_Actor.c" "Tcp_Server_Actor.c" "Web_server_Actor.c"
 							  "SQL_Actor.c" "ETH_Actor.c" "trimLightActor.c" "led_strip_encoder.c" "SYSTEM_Actor.c"
 							 "EVENT_Actor.c" "SPIFFS_Actor.c" "System_Files_Actor.c" "rtc/pcf8563.c" "rtc/i2cdev.c" 

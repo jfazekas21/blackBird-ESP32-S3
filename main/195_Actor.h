@@ -320,6 +320,9 @@ bool m225_actor_set(const char *name, const char *value);
  */
 void m225_set_menu_ctx(const char *ctx);
 
+void m225_state_snapshot(m225_state_t *out);
+void m225_state_load(const m225_state_t *in);
+
 /*
  * Standard actor interface function called by console_que_sel().
  * Lazily initialises the actor on first call, then queues the message.

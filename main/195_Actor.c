@@ -11,6 +11,7 @@
  */
 
 #include "195_Actor.h"
+#include "m225_methods.h"
 #include "actor.h"
 #include "Config.h"
 #include "Console_Actor.h"
@@ -319,15 +320,26 @@ static m225_state_t s_m225 = {
 
 /* ─── Setter wrapper — matches BLE_Actor.c bool (*as)(name, value) ──────── */
 
-/* Forward declaration — m225_set_property is defined later in this file */
 static void m225_set_property(const char *name, const char *value,
                                AMessage_st *msg);
+
+void m225_state_snapshot(m225_state_t *out)
+{
+    if (out) *out = s_m225;
+}
+
+void m225_state_load(const m225_state_t *in)
+{
+    if (in) s_m225 = *in;
+}
 
 bool m225_actor_set(const char *name, const char *value)
 {
     if (!name || !value) return false;
+    m225_clamp_begin();
     m225_set_property(name, value, NULL);
-    return true; /* always succeeds (value stored) */
+    m225_nvs_save();
+    return true;
 }
 
 /* ─── Getter — used by menu_builder.c ───────────────────────────────────── */
@@ -677,7 +689,23 @@ static void m225_set_property(const char *name, const char *value,
 #define S_I32(field)  s_m225.field = (int32_t)atol(value)
 #define S_FLT(field)  s_m225.field = (float)atof(value)
 
-    /* ── Context-sensitive disambiguation ─────────────────────────────────── */
+#define S_U8_CLAMP(field, minv, maxv) do { \
+    int _cv = atoi(value); \
+    char _cap[16]; \
+    if (_cv < (minv)) { _cv = (minv); snprintf(_cap, sizeof(_cap), "%d", (minv)); m225_clamp_note(name, _cap); } \
+    else if (_cv > (maxv)) { _cv = (maxv); snprintf(_cap, sizeof(_cap), "%d", (maxv)); m225_clamp_note(name, _cap); } \
+    s_m225.field = (uint8_t)_cv; \
+    s_m225.configuration_counter++; \
+} while (0)
+
+#define S_U16_CLAMP(field, minv, maxv) do { \
+    int _cv = atoi(value); \
+    char _cap[16]; \
+    if (_cv < (minv)) { _cv = (minv); snprintf(_cap, sizeof(_cap), "%d", (minv)); m225_clamp_note(name, _cap); } \
+    else if (_cv > (maxv)) { _cv = (maxv); snprintf(_cap, sizeof(_cap), "%d", (maxv)); m225_clamp_note(name, _cap); } \
+    s_m225.field = (uint16_t)_cv; \
+    s_m225.configuration_counter++; \
+} while (0)
 
     if (!strcmp(ctx, "Ethernet")) {
         if (!strcmp(name, "DHCP"))          { S_BOOL(eth_dhcp);          return; }
@@ -776,16 +804,18 @@ static void m225_set_property(const char *name, const char *value,
     if (!strcmp(name, "ZeroTracking"))         { S_STR(zero_tracking);      return; }
     if (!strcmp(name, "ZeroLimit"))            { S_BOOL(zero_limit);        return; }
     if (!strcmp(name, "PowerUpZero"))          { S_BOOL(power_up_zero);     return; }
-    if (!strcmp(name, "SampleRate"))           { S_U8(sample_rate);         return; }
-    if (!strcmp(name, "MotionRange"))          { S_U8(motion_range);        return; }
-    if (!strcmp(name, "StableCount"))          { S_U8(stable_count);        return; }
-    if (!strcmp(name, "WeightIntervals"))      { S_U8(weight_intervals);    return; }
-    if (!strcmp(name, "ScaleType"))            { S_STR(scale_type);         return; }
-    if (!strcmp(name, "FilterType"))           { S_STR(filter_type);        return; }
-    if (!strcmp(name, "FilterLevel"))          { S_U8(filter_level);        return; }
-    if (!strcmp(name, "FilterBreak"))          { S_U8(filter_break);        return; }
+    if (!strcmp(name, "SampleRate"))           { S_U8_CLAMP(sample_rate, 1, 16); return; }
+    if (!strcmp(name, "MotionRange"))          { S_U8_CLAMP(motion_range, 1, 10); return; }
+    if (!strcmp(name, "StableCount"))          { S_U8_CLAMP(stable_count, 1, 20); return; }
+    if (!strcmp(name, "FilterLevel"))          { S_U8_CLAMP(filter_level, 0, 9); return; }
+    if (!strcmp(name, "FilterBreak"))          { S_U8_CLAMP(filter_break, 0, 9); return; }
+    if (!strcmp(name, "NumberOfScales"))       { S_U8_CLAMP(number_of_scales, 1, 3); return; }
+    if (!strcmp(name, "DecimalPlace"))         { S_U8_CLAMP(decimal_place, 0, 4); return; }
+    if (!strcmp(name, "PrelimFilterCount"))    { S_U8_CLAMP(prelim_filter_count, 0, 255); return; }
+    if (!strcmp(name, "WeightIntervals"))      { S_U8(weight_intervals);      return; }
+    if (!strcmp(name, "ScaleType"))            { S_STR(scale_type);           return; }
+    if (!strcmp(name, "FilterType"))           { S_STR(filter_type);          return; }
     if (!strcmp(name, "Interval"))             { S_U32(interval);           return; }
-    if (!strcmp(name, "DecimalPlace"))         { S_U8(decimal_place);       return; }
     if (!strcmp(name, "Capacity"))             { S_U32(capacity);           return; }
     if (!strcmp(name, "LowInterval"))          { S_U32(low_interval);       return; }
     if (!strcmp(name, "LowDecimalPlace"))      { S_U8(low_decimal_place);   return; }
@@ -793,11 +823,12 @@ static void m225_set_property(const char *name, const char *value,
     if (!strcmp(name, "HighInterval"))         { S_U32(high_interval);      return; }
     if (!strcmp(name, "HighDecimalPlace"))     { S_U8(high_decimal_place);  return; }
     if (!strcmp(name, "HighCapacity"))         { S_U32(high_capacity);      return; }
-    if (!strcmp(name, "PrelimFilterCount"))    { S_U8(prelim_filter_count); return; }
 
     /* ScaleCalibration */
-    if (!strcmp(name, "SpanWeight"))           { S_FLT(span_weight);   return; }
-    if (!strcmp(name, "LC1"))                  { S_U32(lc1);           return; }
+    if (!strcmp(name, "SpanWeight"))           { S_FLT(span_weight);        return; }
+    if (!strcmp(name, "SpanCount"))            { S_U32(span_count);         return; }
+    if (!strcmp(name, "ZeroCount"))            { S_U32(zero_count);         return; }
+    if (!strcmp(name, "LC1"))                  { S_U32(lc1);                return; }
     if (!strcmp(name, "LC2"))                  { S_U32(lc2);           return; }
     if (!strcmp(name, "LC3"))                  { S_U32(lc3);           return; }
     if (!strcmp(name, "LC4"))                  { S_U32(lc4);           return; }
@@ -1064,6 +1095,7 @@ static void monitor(void *pv __attribute__((unused)))
 
 static void actor_init(void)
 {
+    m225_nvs_init();
     s_rx_queue = xQueueCreateStatic(M225_QUEUE_LENGTH, sizeof(AMessage_st),
                                     s_queue_storage, &s_queue_buf);
     xTaskCreateStaticPinnedToCore(

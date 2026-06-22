@@ -17,6 +17,7 @@
 #include <esp_netif.h>
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
+#include "ble_comms_push.h"
 
 
 //----------------------------- Actor Tags ---------------------------------------//
@@ -1678,6 +1679,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 			s_Message_Rx_New.payload_size = strlen((char*)s_Message_Rx_New.payload_p8);
             cJSON_Delete(root);
             console_send_responce_to_console_xface(&s_Message_Rx_New);
+            {
+                const char *reason = log_wifi_disconn_reason(s_Para.wifi_disconnect_reason);
+                ble_comms_push_async_err("WIFI", (int)s_Para.wifi_disconnect_reason, reason);
+            }
             Send_CMD_To_Other_Actor(FILE_SYSTEM,"FILE_SYSTEM",payLoadData_Event,strlen(payLoadData_Event),"SAVE_WIFI_AUDIT_LOG");
             xEventGroupClearBits(wifi_event_group, CONNECTED_BIT_u16);
 
