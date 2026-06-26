@@ -16,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -36,6 +37,7 @@ uint16_t hrs_hrm_handle;
 /* ── BSP UART globals ───────────────────────────────────────────────────── */
 uint16_t          bsp_tx_val_handle  = 0;
 bool              bsp_notify_enabled = false;
+volatile bool     bsp_tx_paused      = false;
 volatile uint16_t g_bsp_conn_handle  = 0;
 
 /* ── Pointer queue (GATT callback → bsp_proc_task) ─────────────────────── */
@@ -46,9 +48,10 @@ typedef struct {
     uint8_t  data[1];   /* variable: allocated as sizeof - 1 + len */
 } bsp_pkt_t;
 
-static QueueHandle_t s_bsp_queue = NULL;
-static TaskHandle_t  s_bsp_task  = NULL;
-static bsp_state_t   s_bsp_state;
+static QueueHandle_t     s_bsp_queue = NULL;
+static TaskHandle_t      s_bsp_task  = NULL;
+static SemaphoreHandle_t s_tx_mutex  = NULL;
+static bsp_state_t       s_bsp_state;
 
 /* ── UUID static storage — BLE_UUID128_INIT produces a valid ble_uuid128_t initializer */
 static const ble_uuid128_t bsp_svc_uuid = BSP_SVC_UUID128_INIT;
@@ -135,11 +138,18 @@ static uint8_t s_tx_seq = 0;
 
 void bsp_send_record(uint8_t channel, const uint8_t *payload, uint32_t len)
 {
+    /* Serialize multi-frame records — concurrent callers (e.g. telemetry task
+     * + JSON handler) otherwise interleave DATA chunks and break app demux. */
+    if (!s_tx_mutex || xSemaphoreTake(s_tx_mutex, portMAX_DELAY) != pdTRUE) {
+        return;
+    }
+
     /* Build the flat BSP record: [channel:1][len:3LE][payload:N] */
     uint32_t rec_total = 4u + len;
     uint8_t *rec = pvPortMalloc(rec_total);
     if (!rec) {
         printf("[BSP] send_record OOM len=%lu\n", (unsigned long)len);
+        xSemaphoreGive(s_tx_mutex);
         return;
     }
     rec[0] = channel;
@@ -182,6 +192,7 @@ void bsp_send_record(uint8_t channel, const uint8_t *payload, uint32_t len)
     }
 
     vPortFree(rec);
+    xSemaphoreGive(s_tx_mutex);
 }
 
 /* ── BSP processing task ────────────────────────────────────────────────── */
@@ -234,16 +245,20 @@ void bsp_on_connect(uint16_t conn_handle)
 {
     g_bsp_conn_handle  = conn_handle;
     bsp_notify_enabled = false;   /* cleared until Flutter subscribes */
+    bsp_tx_paused      = false;   /* fresh session starts unpaused */
     s_tx_seq           = 0;       /* Dart engine resets _rxExpected=0 on connect */
     bsp_reset(&s_bsp_state, conn_handle);
+    bsp_record_reset();           /* drop any partial record from a prior session */
     printf("[BSP] connected conn=%d\n", conn_handle);
 }
 
 void bsp_on_disconnect(void)
 {
     bsp_notify_enabled  = false;
+    bsp_tx_paused       = false;
     g_bsp_conn_handle   = 0;
     s_bsp_state.active  = false;
+    bsp_record_reset();           /* free any in-flight record buffer */
     printf("[BSP] disconnected\n");
 }
 
@@ -278,6 +293,11 @@ int gatts_svr_init(void)
     s_bsp_queue = xQueueCreate(BSP_QUEUE_DEPTH, sizeof(bsp_pkt_t *));
     if (!s_bsp_queue) {
         printf("[GATT] queue create failed\n");
+        return BLE_HS_ENOMEM;
+    }
+    s_tx_mutex = xSemaphoreCreateMutex();
+    if (!s_tx_mutex) {
+        printf("[GATT] tx mutex create failed\n");
         return BLE_HS_ENOMEM;
     }
 

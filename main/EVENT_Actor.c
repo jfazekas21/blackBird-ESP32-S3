@@ -1138,7 +1138,6 @@ static void Analyse_Response(AMessage_st* s_Message_Rx)
 						memset(payLoadData,0,sizeof(payLoadData));//\0';
 						cJSON_PrintPreallocated(responseObject1, payLoadData, sizeof(payLoadData), false);
 						Send_CMD_To_Other_Actor(CONSOLE,"CONSOLE", payLoadData, strlen(payLoadData), "GMT_DST");
-						Send_CMD_To_Other_Actor(LIGHTING,"LIGHTING", payLoadData, strlen(payLoadData), "LIGHT_GMT_DST");
 						Send_CMD_To_Other_Actor(FILE_SYSTEM,"FILE_SYSTEM", payLoadData, strlen(payLoadData), "FILE_SYSTEM_GMT_DST");
 						Send_CMD_To_Other_Actor(SYSTEM,"SYSTEM", payLoadData, strlen(payLoadData), "GMT_DST_SYSTEM");
 
@@ -1680,7 +1679,6 @@ static void Tasks_EventCheck(void *pvParameters __attribute__((unused)))
 						memset(payLoadDataEvtChk,0,sizeof(payLoadDataEvtChk));//\0';
 						cJSON_PrintPreallocated(responseObject1, payLoadDataEvtChk, sizeof(payLoadDataEvtChk), false);
 						Send_CMD_To_Other_Actor(CONSOLE,"CONSOLE", payLoadDataEvtChk, strlen(payLoadDataEvtChk), "GMT_DST");
-						Send_CMD_To_Other_Actor(LIGHTING,"LIGHTING", payLoadDataEvtChk, strlen(payLoadDataEvtChk), "LIGHT_GMT_DST");
 						Send_CMD_To_Other_Actor(FILE_SYSTEM,"FILE_SYSTEM", payLoadData, strlen(payLoadData), "FILE_SYSTEM_GMT_DST");
 						Send_CMD_To_Other_Actor(SYSTEM,"SYSTEM", payLoadData, strlen(payLoadData), "GMT_DST_SYSTEM");
 

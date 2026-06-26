@@ -144,7 +144,6 @@ ActorQueue A_Queue[NUMBER_OF_ACTORS] = {                         // Queue proper
 		{ "UDP"			    , UDP 			},
 		{ "SQL"				, SQL			},
 		{ "CONSOLE"			, CONSOLE	    },
-		{ "LIGHTING"		, LIGHTING		},
 		{ "SYSTEM"			, SYSTEM		},
 		{ "EVENT_ACTOR"		, EVENT_ACTOR	},
 		{ "SYS_FILES"		, SYS_FILES		},
@@ -1120,9 +1119,6 @@ void console_que_sel(AMessage_st* s_Message) {
 				case TCP_SERVER		:   TCP_ConsoleWriteToActor_xface(&s_Message_Tx_new);			break;
 				case UDP			:	UDP_ConsoleWriteToActor_xface(&s_Message_Tx_new);			break;
 				case SQL			:	SQL_ConsoleWriteToActor_xface(&s_Message_Tx_new);			break;
-#if !defined(B394) //&& !defined(B527)
-				case LIGHTING		:	LIGHT_ConsoleWriteToActor_xface(&s_Message_Tx_new);         break;
-#endif
 				case SYSTEM			:	SYSTEM_ConsoleWriteToActor_xface(&s_Message_Tx_new);        break;
 				case EVENT_ACTOR    :	EVENT_ConsoleWriteToActor_xface(&s_Message_Tx_new);         break;
 				case SYS_FILES		:   System_Files_ConsoleWriteToActor_xface(&s_Message_Tx_new);	break;
@@ -2290,20 +2286,9 @@ static void InitActors(void *pvParameters __attribute__((unused))) {
 	Send_CMD_To_Other_Actor(PUSHBUTTON, "PUSHBUTTON", "\0", 0, "INIT");
 	Send_CMD_To_Other_Actor(BLE, "BLE", "\0", 0, "INIT");
 	Send_CMD_To_Other_Actor(NTP, "NTP", "\0", 0, "INIT");
-	vTaskDelay(15000 / portTICK_PERIOD_MS);   //This delay is given to initialize light actor after Ihub connection (to avoid light flickering)
 	Send_CMD_To_Other_Actor(EVENT_ACTOR, "EVENT_ACTOR", "\0", 0, "INIT");
 	Send_CMD_To_Other_Actor(EVENT_ACTOR, "EVENT_ACTOR", "\0", 0, "UPDATE_SCH_TABLE");
 	Send_CMD_To_Other_Actor(EVENT_ACTOR, "EVENT_ACTOR", "\0", 0, "UPDATE_LOC");
-    Send_CMD_To_Other_Actor(LIGHTING, "LIGHTING", "\0", 0, "INIT");  //Speed-up
-    vTaskDelay(5000 / portTICK_PERIOD_MS);
-    //printf("Init READ_VIRTUAL_TABLE \n");
-    Send_CMD_To_Other_Actor(LIGHTING, "LIGHTING", "\0", 0, "READ_VIRTUAL_TABLE");
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-   // printf("Init READ_COMMAND_TABLE \n");
-    Send_CMD_To_Other_Actor(LIGHTING, "LIGHTING", "\0", 0, "READ_COMMAND_TABLE");
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
-   // printf("Init READ_PLAYLIST_TABLE \n");
-    Send_CMD_To_Other_Actor(LIGHTING, "LIGHTING", "\0", 0, "READ_PLAYLIST_TABLE");//	Send_CMD_To_Other_Actor(LIGHTING, "LIGHTING", "\0", 0, "READ_PLAYLIST_TABLE");  //Speed-up
 	
 	InitActors_Handle = NULL;
 	vTaskDelete(InitActors_Handle);  // Delete the task

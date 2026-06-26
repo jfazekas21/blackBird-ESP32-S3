@@ -515,94 +515,7 @@ static void help(AMessage_st* s_Message_Rx) {
 
 
 static void toggle_lighting_state(void) {
-    if (isOn==0) {
-        // Create the "ALL OFF" command
-        cJSON *responseObject = cJSON_CreateObject();
-        cJSON *channelArray = cJSON_CreateArray();
-        cJSON_AddItemToArray(channelArray, cJSON_CreateNumber(-1));
-        cJSON_AddItemToObject(responseObject, "CH", channelArray);
-		memset(payLoadData_PB,0,sizeof(payLoadData_PB));
-		cJSON_PrintPreallocated(responseObject, payLoadData_PB, sizeof(payLoadData_PB), false);			
-        Send_CMD_To_Other_Actor(LIGHTING, "LIGHTING", payLoadData_PB, strlen(payLoadData_PB), "OFF");
-        cJSON_Delete(responseObject);
-    }
-    else {
-
-		// Create the main JSON object
-		cJSON *jsonObject = cJSON_CreateObject();
-
-		// Create and add the array for the "CH" key
-		cJSON *channelArray = cJSON_CreateArray();
-		cJSON_AddItemToArray(channelArray, cJSON_CreateNumber(-1));
-		cJSON_AddItemToObject(jsonObject, "CH", channelArray);
-
-		cJSON_AddNumberToObject(jsonObject, "Brightness", 100);
-		// Add the "Function" key to the main JSON object
-		cJSON_AddStringToObject(jsonObject, "Function", "colorIndex");
-
-
-		// Create the nested "Config" JSON object
-		cJSON *configObject = cJSON_CreateObject();
-		if (isOn==1)
-		{
-			cJSON_AddNumberToObject(configObject, "Index", 27);
-		}
-		else if (isOn==2)
-		{
-			cJSON_AddNumberToObject(configObject, "Index", 25);
-		}
-		else if (isOn==3)
-		{
-			cJSON_AddNumberToObject(configObject, "Index", 20);
-		}
-		else if (isOn==4)
-		{
-			cJSON_AddNumberToObject(configObject, "Index", 0);
-		}
-		else if (isOn==5)
-		{
-			cJSON_AddNumberToObject(configObject, "Index", 7);
-		}
-		else if (isOn==6)
-		{
-			cJSON_AddNumberToObject(configObject, "Index", 10);
-		}
-		else if (isOn==7)
-		{
-			cJSON_AddNumberToObject(configObject, "Index", 12);
-		}
-		else if (isOn==8)
-		{
-			cJSON_AddNumberToObject(configObject, "Index", 14);
-		}
-		else if (isOn==9)
-		{
-			cJSON_AddNumberToObject(configObject, "Index", 16);
-		}
-		else if (isOn==10)
-		{
-			cJSON_AddNumberToObject(configObject, "Index", 19);
-		}
-
-		// Add the "Config" object to the main JSON object
-		cJSON_AddItemToObject(jsonObject, "Config", configObject);
-
-		// Convert the JSON object to a string
-		memset(payLoadData_PB,0,sizeof(payLoadData_PB));
-		cJSON_PrintPreallocated(jsonObject, payLoadData_PB, sizeof(payLoadData_PB), false);	
-		// Send the command
-		Send_CMD_To_Other_Actor(LIGHTING, "LIGHTING", payLoadData_PB, strlen(payLoadData_PB), "ON");
-
-
-		// Free the JSON object
-		cJSON_Delete(jsonObject);
-    }
-
-    isOn++;
-	if (isOn>=11)
-	{
-		isOn = 0;
-	}
+    (void)isOn;
 }
 static void set_to_other_actor(const char* dest_Actor,const uint8_t data_type, const char* parameter, const void * value) {
 	uint8_t out_val [128] 	= {0}; //(uint8_t*) heap_caps_calloc(128,sizeof(uint8_t),MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -696,63 +609,9 @@ static void stop_ble_advertisement(void* arg) {
 
 static void ToggleAllColors(void)
 {
-	int numberOfCommands = sizeof(defaultCommands) / sizeof(LightingCommand);
-	strcpy(line, defaultCommands[l_color_Index].command);
-	Send_CMD_To_Other_Actor(LIGHTING, "LIGHTING", line, strlen(line), "ON");
-	l_color_Index++;
-	if(l_color_Index >= numberOfCommands)
-	{
-		l_color_Index = 0;
-	}
 }
 
 void CreateAndSendLightingOnCommand(void) {
-    // Create the main JSON object
-    cJSON *jsonObject = cJSON_CreateObject();
-
-    // Create and add the array for the "CH" key
-    cJSON *channelArray = cJSON_CreateArray();
-    cJSON_AddItemToArray(channelArray, cJSON_CreateNumber(-1)); // Single channel -1
-    cJSON_AddItemToObject(jsonObject, "CH", channelArray);
-
-    cJSON_AddNumberToObject(jsonObject, "Brightness", 100);
-    // Add the "Function" key-value pair
-    cJSON_AddStringToObject(jsonObject, "Function", "Custom");
-
-    // Create the nested "Config" JSON object
-    cJSON *configObject = cJSON_CreateObject();
-
-    // Create and add the "colorSelections" array to the "Config" object
-    cJSON *colorSelectionsArray = cJSON_CreateArray();
-    cJSON_AddItemToArray(colorSelectionsArray, cJSON_CreateString("0.00 , 100.00 , 100.00"));
-    cJSON_AddItemToArray(colorSelectionsArray, cJSON_CreateString("0.00 , 0.00 , 100.00"));
-    cJSON_AddItemToArray(colorSelectionsArray, cJSON_CreateString("120.00 , 100.00 , 100.00"));
-    cJSON_AddItemToArray(colorSelectionsArray, cJSON_CreateString("240.00 , 100.00 , 100.00"));
-    cJSON_AddItemToObject(configObject, "colorSelections", colorSelectionsArray);
-
-    // Add other key-value pairs to the "Config" object
-    cJSON_AddItemToObject(configObject, "bgColor", cJSON_CreateFloatArray((const float[]){0.00, 0.00, 0.00}, 3));
-    cJSON_AddNumberToObject(configObject, "colorLength", 98.00);     // Updated colorLength
-    cJSON_AddNumberToObject(configObject, "paddingLength", 98.00);   // Updated paddingLength
-    cJSON_AddStringToObject(configObject, "transitionType", "Fade Out");
-    cJSON_AddNumberToObject(configObject, "movingSpeed", 66.17);     // Updated movingSpeed
-    cJSON_AddNumberToObject(configObject, "enableMirror", 0);
-    cJSON_AddNumberToObject(configObject, "mirrorPosition", 15.00);  // Updated mirrorPosition
-    cJSON_AddNumberToObject(configObject, "oscAmp", 0.00);
-    cJSON_AddNumberToObject(configObject, "oscPeriod", 1.00);       // Updated oscPeriod
-
-    // Add the "Config" object to the main JSON object
-    cJSON_AddItemToObject(jsonObject, "Config", configObject);
-
-    // Convert the JSON object to a string
-	memset(payLoadData_PB,0,sizeof(payLoadData_PB));
-	cJSON_PrintPreallocated(jsonObject, payLoadData_PB, sizeof(payLoadData_PB), false);
-	
-    // Send the command
-    Send_CMD_To_Other_Actor(LIGHTING, "LIGHTING", payLoadData_PB, strlen(payLoadData_PB), "ON");
-
-    // Free the JSON object
-    cJSON_Delete(jsonObject);
 }
 
 static void sendLedState(const char *stateName, int duration) {

@@ -22,6 +22,8 @@
 #include "esp_netif_types.h"
 #include "esp_eth.h"
 #include "esp_eth_mac.h"
+#include "esp_eth_mac_spi.h"
+#include "esp_eth_phy.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "driver/gpio.h"

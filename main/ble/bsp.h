@@ -97,6 +97,13 @@ void bsp_flush_ack(bsp_state_t *s);
 void bsp_record_feed(const uint8_t *data, uint16_t len);
 
 /*
+ * Reset the record reassembler. MUST be called on every (re)connect so a
+ * partial record left over from a previous session does not swallow the first
+ * bytes of the new session's commands. Frees any in-flight record buffer.
+ */
+void bsp_record_reset(void);
+
+/*
  * Called when a complete BSP record is ready.
  * Dispatches to bsp_handle_json / bsp_handle_file / bsp_handle_bench.
  */

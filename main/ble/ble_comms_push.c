@@ -7,8 +7,7 @@
 #include "gatt_service.h"
 #include "cJSON.h"
 #include "esp_log.h"
-#include "esp_heap_caps.h"
-#include "esp_timer.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <stdio.h>
@@ -49,36 +48,14 @@ void ble_comms_push_async_err(const char *actor, int error_code, const char *rea
 static void telemetry_task(void *arg)
 {
     (void)arg;
-    int tick = 0;
     while (s_telemetry_running) {
-        if (bsp_notify_enabled) {
-            size_t heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-            uint32_t up = (uint32_t)(esp_timer_get_time() / 1000000ULL);
-            char heap_s[16];
-            if (heap >= 1024) snprintf(heap_s, sizeof(heap_s), "%.1fk", heap / 1024.0f);
-            else snprintf(heap_s, sizeof(heap_s), "%u", (unsigned)heap);
-
-            cJSON *root = cJSON_CreateObject();
-            cJSON *msg  = cJSON_CreateObject();
-            cJSON *esp  = cJSON_CreateObject();
-            cJSON_AddStringToObject(esp, "heap", heap_s);
-            cJSON_AddNumberToObject(esp, "uptime_s", up);
-            cJSON_AddStringToObject(msg, "act", "ESP");
-            cJSON_AddItemToObject(msg, "ESP", esp);
-            cJSON_AddItemToObject(root, "msg", msg);
-            char *s = cJSON_PrintUnformatted(root);
-            if (s) {
-                ble_comms_push_json(s);
-                free(s);
-            }
-            cJSON_Delete(root);
-
-            if ((tick++ % 2) == 0) {
-                char gross[16], net[16];
-                snprintf(gross, sizeof(gross), "%.2f", 1234.56 + (tick % 10));
-                snprintf(net, sizeof(net), "%.2f", 1200.00 + (tick % 10));
-                ble_comms_push_scale_telemetry(gross, net);
-            }
+        if (bsp_notify_enabled && !bsp_tx_paused) {
+            char gross[16], net[16];
+            uint32_t w = (esp_random() % 5000u) + 1u;
+            uint32_t n = (esp_random() % 5000u) + 1u;
+            snprintf(gross, sizeof(gross), "%u", (unsigned)w);
+            snprintf(net, sizeof(net), "%u", (unsigned)n);
+            ble_comms_push_scale_telemetry(gross, net);
         }
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
@@ -100,7 +77,7 @@ void ble_comms_telemetry_stop(void)
 
 void ble_comms_push_scale_telemetry(const char *gross, const char *net)
 {
-    if (!bsp_notify_enabled) return;
+    if (!bsp_notify_enabled || bsp_tx_paused) return;
     cJSON *root = cJSON_CreateObject();
     cJSON *msg  = cJSON_CreateObject();
     cJSON *sc   = cJSON_CreateObject();

@@ -853,7 +853,6 @@ static char Dest_actor_que_sel(char *str_prop) {
 				case UDP			:	return UDP;				break;
 				case SQL			:	return SQL;				break;
 				case CONSOLE		:	return CONSOLE;			break;
-				case LIGHTING	    :	return LIGHTING;		    break;
 				case SYSTEM	        :	return SYSTEM;		    break;
 				case EVENT_ACTOR	:	return EVENT_ACTOR;		break;
 				case SYS_FILES	:		return SYS_FILES;		break;

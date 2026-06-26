@@ -61,6 +61,11 @@ extern uint16_t bsp_tx_val_handle;
 /* Set true by BLE_GAP_EVENT_SUBSCRIBE when Flutter enables notifications */
 extern bool bsp_notify_enabled;
 
+/* App-driven flow control: set by a BSP PAUSE frame, cleared by RESUME.
+ * While true, proactive/unsolicited senders (scale telemetry) suppress their
+ * pushes. Command/response traffic and BSP-layer ACKs are unaffected. */
+extern volatile bool bsp_tx_paused;
+
 /* Set to the current NimBLE conn_handle on BLE_GAP_EVENT_CONNECT so the
  * BSP processing task can address ACK notifications to the right peer */
 extern volatile uint16_t g_bsp_conn_handle;

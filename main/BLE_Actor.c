@@ -168,6 +168,7 @@ static void get_actor_properties(AMessage_st* s_Message_Rx);                  //
 static void read_sys_prop (void *pvParameters __attribute__((unused)));
 static void initiate_read_sys_prop();
 static void blehr_advertise(void);
+static void ble_set_device_name_from_mac(const uint8_t mac[6]);
 static void sendLedState(const char *stateName, int duration);
 static void Stop_BLE_Advertising(AMessage_st* s_Message_Rx);
 static int blehr_gap_event(struct ble_gap_event *event, void *arg);
@@ -219,6 +220,15 @@ static bool notify_state;
 static uint16_t conn_handle;
 static  char device_name[32] ;
 static uint8_t blehr_addr_type;
+
+static void ble_set_device_name_from_mac(const uint8_t mac[6])
+{
+    snprintf(device_name, sizeof(device_name),
+             "195_%02X%02X%02X%02X%02X%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    strncpy((char *)&s_Para.device_name_a8, device_name, BLE_BTNAME_LEN - 1);
+    s_Para.device_name_a8[BLE_BTNAME_LEN - 1] = '\0';
+}
 
 //-------------------------- Common Actor Methods ------------------------------//
 static uint8_t set(char *property, char *value, AMessage_st* s_Message_Rx) {
@@ -518,6 +528,7 @@ static void init(void *a, void *b)
     mutex = xQueueCreateMutex( ( ( uint8_t ) 1U ) );
    // Get the local BLE address
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    ble_set_device_name_from_mac(mac);
     memset(s_Para.UUID_a8, 0, sizeof(s_Para.UUID_a8));
 	const esp_app_desc_t *new_app_info = esp_app_get_description();
 	for(int i= 0; i<strlen(new_app_info->version); i++)
@@ -1329,6 +1340,15 @@ static int blehr_gap_event(struct ble_gap_event *event, void *arg)
         }
 
         bsp_on_disconnect();
+
+        /* Resume advertising so the central can reconnect without a reboot.
+         * NimBLE stops advertising once a connection is established and does
+         * NOT auto-restart it on disconnect, so re-arm the request flag and
+         * restart advertising here. blehr_advertise() is a no-op if the stack
+         * is down or advertising is already active. */
+        ble_advertise_requested = true;
+        blehr_advertise();
+        s_Para.Advertising_mode_u8 = 1;
         break;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -1598,9 +1618,8 @@ static void initiate_read_sys_prop()
 
 static void read_sys_prop(void *pvParameters __attribute__((unused)))
 {
-		char buffer[200] = {"\0"};//,str[255] = {0};
-		char DeviceID[50] = {0}, ManufacturerName[20] = {0}, ModelName[20] = {0};
-		static char l_device_name[60] = {0}, Prop_payload[100] = {0}; // 29 bytes max
+		char buffer[200] = {"\0"};
+		static char Prop_payload[100] = {0};
 		uint8_t mac[6] = {0};
 		cJSON *responseObject = cJSON_CreateObject();
 		cJSON_AddStringToObject(responseObject, "FILE_NAME",(char*)Device_File);
@@ -1625,37 +1644,12 @@ static void read_sys_prop(void *pvParameters __attribute__((unused)))
 	       	else
 	       	{
 				cJSON *Device_id = cJSON_GetObjectItem(in_JSON, "DEVICE_ID");
-				if((Device_id != NULL) && (cJSON_IsString(Device_id)))
-				{
-					strcpy((char*)DeviceID, Device_id->valuestring);
-
-					cJSON *Manufacture_name = cJSON_GetObjectItem(in_JSON, "MANUFACTURER_NAME");
-					if((Manufacture_name != NULL) && (cJSON_IsString(Manufacture_name)))
-					{
-						strcpy((char*)ManufacturerName, Manufacture_name->valuestring);
+				if ((Device_id != NULL) && cJSON_IsString(Device_id)) {
+					esp_read_mac(mac, ESP_MAC_WIFI_STA);
+					ble_set_device_name_from_mac(mac);
+					if (ble_stack_initialized) {
+						ble_svc_gap_device_name_set(device_name);
 					}
-					cJSON *Model_name = cJSON_GetObjectItem(in_JSON, "MODEL_NAME");
-					if((Model_name != NULL) && (cJSON_IsString(Model_name)))
-					{
-						strcpy((char*)ModelName, Model_name->valuestring);
-					}
-
-				    // Extract the last 4 characters of DeviceID
-				    char last4Chars[5]; // 4 characters + null terminator
-				    strncpy(last4Chars, (char*)DeviceID + strlen((char*)DeviceID) - 4, 4);
-				    last4Chars[4] = '\0'; // Null-terminate the string
-
-				    // Convert last4Chars to integer if needed
-				    int last4Value = (int)strtol(last4Chars, NULL, 16);
-
-				    // Assuming you want to use this value to replace mac[4] and mac[5]
-				    mac[4] = (last4Value >> 8) & 0xFF; // Higher 8 bits
-				    mac[5] = last4Value & 0xFF;        // Lower 8 bits
-
-				    // Format the device name using the last 4 bytes
-				    sprintf(l_device_name, "%s %s:%02X%02X", ManufacturerName, ModelName, mac[4], mac[5]);
-				    strcpy((char*)&s_Para.device_name_a8, l_device_name);
-				    strcpy(device_name,(char*)&s_Para.device_name_a8);
 				}
 	       	}
 	       	cJSON_Delete(in_JSON);
@@ -2064,6 +2058,9 @@ void bsp_handle_json(const uint8_t *payload, uint32_t len)
                         cJSON_AddBoolToObject(resp,   "ack",       1);
                         cJSON_AddNumberToObject(resp, "rx_bytes",  (double)g_bsp_bench.rx_bytes);
                         cJSON_AddBoolToObject(resp,   "crc_match", (int)crc_match);
+                        /* Real CRC-32 over the armed (measured) bytes so the app
+                         * can validate integrity, not just the byte count. */
+                        cJSON_AddNumberToObject(resp, "crc32",     (double)g_bsp_bench.crc32);
                         cJSON_AddNumberToObject(resp, "mID",       mid);
 
                     } else {

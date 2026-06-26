@@ -80,11 +80,23 @@ void bsp_feed(bsp_state_t *s, const uint8_t *pkt, uint16_t pkt_len)
         s->rx_expected = 0;
         s->rx_window   = BSP_WINDOW;
         s->ack_pending = false;
+        bsp_record_reset();   /* a resync must also drop any partial record */
         ESP_LOGI(TAG, "RST received — seq reset");
         return;
     }
 
-    if (ptype != BSP_TYPE_DATA) return;   /* PAUSE/RESUME: ignore on RX path */
+    if (ptype == BSP_TYPE_PAUSE || ptype == BSP_TYPE_RESUME) {
+        /* App flow control. Validate CRC over the single type byte, then set or
+         * clear the TX-pause flag honoured by proactive senders (telemetry). */
+        if (pkt_len < 3) return;
+        uint16_t crc = bsp_crc16(pkt, 1);
+        if (crc != ((uint16_t)pkt[1] | ((uint16_t)pkt[2] << 8))) return;
+        bsp_tx_paused = (ptype == BSP_TYPE_PAUSE);
+        ESP_LOGI(TAG, "%s received", (ptype == BSP_TYPE_PAUSE) ? "PAUSE" : "RESUME");
+        return;
+    }
+
+    if (ptype != BSP_TYPE_DATA) return;   /* unknown control type: ignore */
     if (pkt_len < 7) return;              /* min: 4-byte hdr + 1 payload + 2 CRC */
 
     uint8_t  seq  = pkt[1];
@@ -154,6 +166,14 @@ static struct {
     uint32_t rec_fill;   /* bytes received so far */
     uint8_t *buf;        /* PSRAM allocation, rec_len bytes */
 } g_rec;
+
+void bsp_record_reset(void)
+{
+    if (g_rec.buf) {
+        free(g_rec.buf);
+    }
+    memset(&g_rec, 0, sizeof(g_rec));
+}
 
 void bsp_record_feed(const uint8_t *data, uint16_t len)
 {

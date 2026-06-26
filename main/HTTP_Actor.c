@@ -1333,24 +1333,6 @@ static void http_stream_reader(void *pvParameters)
 			{
 			  Send_CMD_To_Other_Actor(EVENT_ACTOR, "EVENT_ACTOR", "\0", 0, "UPDATE_LOC");
 			}
-		  else if(!strcasecmp(fileRequest.file_name,"A:/Database/Color.db"))
-			{
-			  Send_CMD_To_Other_Actor(LIGHTING,"LIGHTING", "\0", 0, "READ_COLOR_TABLE");
-			}
-		  else if((!strcasecmp(fileRequest.file_name,"A:/Database/Virtual_Table.db")) ||
-				  (!strcasecmp(fileRequest.file_name,"A:/Database/Virtual_Group_Table.db")))
-			{
-			  Send_CMD_To_Other_Actor(LIGHTING,"LIGHTING", "\0", 0, "READ_VIRTUAL_TABLE");
-			}
-		  else if(!strcasecmp(fileRequest.file_name,"A:/Database/Command_Table.db"))
-			{
-			  Send_CMD_To_Other_Actor(LIGHTING,"LIGHTING", "\0", 0, "READ_COMMAND_TABLE");
-			}
-		  else if(!strcasecmp(fileRequest.file_name,"A:/Database/Playlist_Table.db"))
-			{
-			  Send_CMD_To_Other_Actor(LIGHTING,"LIGHTING", "\0", 0, "READ_PLAYLIST_TABLE");
-			  vTaskDelay(pdMS_TO_TICKS(10000));
-			}
 
 		  	struct timeval currentTime;
 			_gettimeofday_r(NULL, &currentTime, NULL);

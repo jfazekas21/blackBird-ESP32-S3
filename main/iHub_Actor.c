@@ -283,7 +283,6 @@ static int64_t last_successful_activity_us = 0;
 static uint64_t get_current_time_ms();
 static void periodic_timer_callback(void* arg);
 static void twin_additional_data(AMessage_st* s_Message_Rx);
-static void twin_additional_LIGHTING_data(AMessage_st* s_Message_Rx);
 static void merge_connectivity_info_response(cJSON *responseKey);
 static time_t convert_to_epoch(int year, int month, int day, int hour, int minute, int second);
 static int parse_datetime(const char* datetime, int* year, int* month, int* day, int* hour, int* minute);
@@ -1231,27 +1230,6 @@ static void Analyse_Response(AMessage_st* s_Message_Rx)
 		 		return;
 		 	}
 
-			if(strcmp((char*)s_Message_Rx->src_Actor_a8,"LIGHTING")==0)
-			{
-				in_JSON 		= cJSON_Parse((char*) s_Message_Rx->payload_p8);
-				cJSON *commandKey = cJSON_GetObjectItem(in_JSON, "COMMAND");
-				if (cJSON_IsString(commandKey) && (strcmp(commandKey->valuestring,"GET")==0))
-				{
-					cJSON *responseKey = cJSON_GetObjectItem(in_JSON, "RESPONSE");
-					if (responseKey != NULL && cJSON_IsString(responseKey->child))
-					{
-						cJSON *name_JSON 		= cJSON_GetObjectItem(responseKey, "LOCOFFSET");
-						if((name_JSON != NULL) && (cJSON_IsString(name_JSON)))
-						{
-							memset(payLoadData,0,sizeof(payLoadData));//\0';
-							cJSON_PrintPreallocated(responseKey, payLoadData, sizeof(payLoadData), false);
-							twin_additional_LIGHTING_data(s_Message_Rx);
-						}
-					}
-				}
-				cJSON_Delete(in_JSON);
-				return;
-			}
 			if((strcmp((char*)s_Message_Rx->src_Actor_a8,"WIFI")==0)||strcmp((char*)s_Message_Rx->src_Actor_a8,"ETH")==0)
 			{
 				in_JSON 		= cJSON_Parse((char*) s_Message_Rx->payload_p8);
@@ -1600,252 +1578,6 @@ static void merge_connectivity_info_response(cJSON *responseKey)
 	cJSON_Delete(merged_response);
 }
 
-static void twin_additional_LIGHTING_data(AMessage_st* s_Message_Rx)
-{
-	char str[100] = {0};
-	int value = 0, value1 = 0, value2 = 0, value3 = 0, value4 = 0;
-	cJSON *root = cJSON_CreateObject();
-	if(root == NULL)
-	{
-		printf("\n Failed to create root object \n");
-		return;
-	}
-	cJSON *responseKey = cJSON_Parse(payLoadData);
-	if (responseKey == NULL) {
-		sprintf(str,"Invalid Json input at %d in %s",__LINE__,__FUNCTION__);
-		Add_Response_msg(str,s_Message_Rx, payLoadData);
-		cJSON_Delete(root);
-		return;
-	}
-
-	cJSON *light_info = cJSON_AddObjectToObject(root, "Channel_Setup");
-	if (light_info == NULL)
-	{
-	    printf("\n Failed to create Channel_Setup object \n");
-	    cJSON_Delete(root);
-	    cJSON_Delete(responseKey);
-	    return;
-	}
-	cJSON *LOCOFFSET_Item = cJSON_GetObjectItem(responseKey, "LOCOFFSET");
-	if((LOCOFFSET_Item != NULL) && (cJSON_IsString(LOCOFFSET_Item)))
-	{
-		value = atoi(LOCOFFSET_Item->valuestring);
-		cJSON_AddNumberToObject(light_info, "LocationOffset", value);
-	}
-
-
-	cJSON *MIDPOFFSET_Item = cJSON_GetObjectItem(responseKey, "MIDPOFFSET");
-	if((MIDPOFFSET_Item != NULL) && (cJSON_IsString(MIDPOFFSET_Item)))
-	{
-		value = atoi(MIDPOFFSET_Item->valuestring);
-		cJSON_AddNumberToObject(light_info, "LocationCenter", value);
-	}
-
-    cJSON *chanArray = cJSON_AddArrayToObject(light_info, "ChannelConfig");
-    if (chanArray == NULL)
-    {
-        printf("\n Failed to create ChannelConfig array \n");
-        cJSON_Delete(root);
-        cJSON_Delete(responseKey);
-        return;
-    }
-    cJSON *chan1 = cJSON_CreateObject();
-	if(chan1 == NULL)
-	{
-		cJSON_Delete(root);
-		cJSON_Delete(responseKey);
-		return;
-	}
-	cJSON *LEDSPACINGCH1_Item = cJSON_GetObjectItem(responseKey, "LEDSPACINGCH1");
-	if((LEDSPACINGCH1_Item != NULL) && (cJSON_IsString(LEDSPACINGCH1_Item)))
-	{
-		value1 = atoi(LEDSPACINGCH1_Item->valuestring);
-	    cJSON_AddNumberToObject(chan1, "LedSpacing",    value1);
-	}
-	cJSON *SET_LED_S_CH1_Item = cJSON_GetObjectItem(responseKey, "SET_LED_S_CH1");
-	if((SET_LED_S_CH1_Item != NULL) && (cJSON_IsString(SET_LED_S_CH1_Item)))
-	{
-		value = atoi(SET_LED_S_CH1_Item->valuestring);
-		if(value1 != 0)
-		{
-			value = value * value1;
-		}
-	    cJSON_AddNumberToObject(chan1, "Length", value);
-	}
-	cJSON *OFFSETCH1_Item = cJSON_GetObjectItem(responseKey, "OFFSETCH1");
-	if((OFFSETCH1_Item != NULL) && (cJSON_IsString(OFFSETCH1_Item)))
-	{
-		value = atoi(OFFSETCH1_Item->valuestring);
-	    cJSON_AddNumberToObject(chan1, "Offset", value);
-	}
-	cJSON *REVDIRCH1_Item = cJSON_GetObjectItem(responseKey, "REVDIRCH1");
-	if((REVDIRCH1_Item != NULL) && (cJSON_IsString(REVDIRCH1_Item)))
-	{
-		value = atoi(REVDIRCH1_Item->valuestring);
-		cJSON_AddNumberToObject(  chan1, "Reversed", value);
-	}
-	cJSON *SCALECH1_Item = cJSON_GetObjectItem(responseKey, "SCALECH1");
-	if((SCALECH1_Item != NULL) && (cJSON_IsString(SCALECH1_Item)))
-	{
-		value = atoi(SCALECH1_Item->valuestring);
-	    cJSON_AddNumberToObject(chan1, "Scale", value);
-	}
-
-    cJSON_AddItemToArray(chanArray, chan1);
-
-    cJSON *chan2 = cJSON_CreateObject();
-	if(chan2 == NULL)
-	{
-		cJSON_Delete(root);
-		cJSON_Delete(responseKey);
-		return;
-	}
-
-	cJSON *LEDSPACINGCH2_Item = cJSON_GetObjectItem(responseKey, "LEDSPACINGCH2");
-	if((LEDSPACINGCH2_Item != NULL) && (cJSON_IsString(LEDSPACINGCH2_Item)))
-	{
-//		cJSON_AddStringToObject(light_info, "LEDSPACINGCH2", LEDSPACINGCH2_Item->valuestring);
-		value2 = atoi(LEDSPACINGCH2_Item->valuestring);
-	    cJSON_AddNumberToObject(chan2, "LedSpacing",    value2);
-	}
-	cJSON *SET_LED_S_CH2_Item = cJSON_GetObjectItem(responseKey, "SET_LED_S_CH2");
-	if((SET_LED_S_CH2_Item != NULL) && (cJSON_IsString(SET_LED_S_CH2_Item)))
-	{
-		value = atoi(SET_LED_S_CH2_Item->valuestring);
-		if(value2 != 0)
-		{
-			value = value * value2;
-		}
-	    cJSON_AddNumberToObject(chan2, "Length", value);
-	}
-	cJSON *OFFSETCH2_Item = cJSON_GetObjectItem(responseKey, "OFFSETCH2");
-	if((OFFSETCH2_Item != NULL) && (cJSON_IsString(OFFSETCH2_Item)))
-	{
-		value = atoi(OFFSETCH2_Item->valuestring);
-	    cJSON_AddNumberToObject(chan2, "Offset", value);
-	}
-	cJSON *REVDIRCH2_Item = cJSON_GetObjectItem(responseKey, "REVDIRCH2");
-	if((REVDIRCH2_Item != NULL) && (cJSON_IsString(REVDIRCH2_Item)))
-	{
-		value = atoi(REVDIRCH2_Item->valuestring);
-		cJSON_AddNumberToObject(  chan2, "Reversed", value);
-	}
-	cJSON *SCALECH2_Item = cJSON_GetObjectItem(responseKey, "SCALECH2");
-	if((SCALECH2_Item != NULL) && (cJSON_IsString(SCALECH2_Item)))
-	{
-		value = atoi(SCALECH2_Item->valuestring);
-	    cJSON_AddNumberToObject(chan2, "Scale", value);
-	}
-
-    cJSON_AddItemToArray(chanArray, chan2);
-
-
-    cJSON *chan3 = cJSON_CreateObject();
-	if(chan3 == NULL)
-	{
-		cJSON_Delete(root);
-		cJSON_Delete(responseKey);
-		return;
-	}
-	cJSON *LEDSPACINGCH3_Item = cJSON_GetObjectItem(responseKey, "LEDSPACINGCH3");
-	if((LEDSPACINGCH3_Item != NULL) && (cJSON_IsString(LEDSPACINGCH3_Item)))
-	{
-		value3 = atoi(LEDSPACINGCH3_Item->valuestring);
-	    cJSON_AddNumberToObject(chan3, "LedSpacing",    value3);
-	}
-	cJSON *SET_LED_S_CH3_Item = cJSON_GetObjectItem(responseKey, "SET_LED_S_CH3");
-	if((SET_LED_S_CH3_Item != NULL) && (cJSON_IsString(SET_LED_S_CH3_Item)))
-	{
-		value = atoi(SET_LED_S_CH3_Item->valuestring);
-		if(value3 != 0)
-		{
-			value = value * value3;
-		}
-	    cJSON_AddNumberToObject(chan3, "Length", value);
-	}
-	cJSON *OFFSETCH3_Item = cJSON_GetObjectItem(responseKey, "OFFSETCH3");
-	if((OFFSETCH3_Item != NULL) && (cJSON_IsString(OFFSETCH3_Item)))
-	{
-		value = atoi(OFFSETCH3_Item->valuestring);
-	    cJSON_AddNumberToObject(chan3, "Offset", value);
-	}
-	cJSON *REVDIRCH3_Item = cJSON_GetObjectItem(responseKey, "REVDIRCH3");
-	if((REVDIRCH3_Item != NULL) && (cJSON_IsString(REVDIRCH3_Item)))
-	{
-		value = atoi(REVDIRCH3_Item->valuestring);
-		cJSON_AddNumberToObject(  chan3, "Reversed", value);
-	}
-	cJSON *SCALECH3_Item = cJSON_GetObjectItem(responseKey, "SCALECH3");
-	if((SCALECH3_Item != NULL) && (cJSON_IsString(SCALECH3_Item)))
-	{
-		value = atoi(SCALECH3_Item->valuestring);
-	    cJSON_AddNumberToObject(chan3, "Scale", value);
-	}
-
-    cJSON_AddItemToArray(chanArray, chan3);
-
-
-    cJSON *chan4 = cJSON_CreateObject();
-	if(chan4 == NULL)
-	{
-		cJSON_Delete(root);
-		cJSON_Delete(responseKey);
-		return;
-	}
-
-	cJSON *LEDSPACINGCH4_Item = cJSON_GetObjectItem(responseKey, "LEDSPACINGCH4");
-	if((LEDSPACINGCH4_Item != NULL) && (cJSON_IsString(LEDSPACINGCH4_Item)))
-	{
-		value4 = atoi(LEDSPACINGCH4_Item->valuestring);
-	    cJSON_AddNumberToObject(chan4, "LedSpacing",    value4);
-	}
-	cJSON *SET_LED_S_CH4_Item = cJSON_GetObjectItem(responseKey, "SET_LED_S_CH4");
-	if((SET_LED_S_CH4_Item != NULL) && (cJSON_IsString(SET_LED_S_CH4_Item)))
-	{
-		value = atoi(SET_LED_S_CH4_Item->valuestring);
-		if(value4 != 0)
-		{
-			value = value * value4;
-		}
-	    cJSON_AddNumberToObject(chan4, "Length", value);
-	}
-	cJSON *OFFSETCH4_Item = cJSON_GetObjectItem(responseKey, "OFFSETCH4");
-	if((OFFSETCH4_Item != NULL) && (cJSON_IsString(OFFSETCH4_Item)))
-	{
-		value = atoi(OFFSETCH4_Item->valuestring);
-	    cJSON_AddNumberToObject(chan4, "Offset", value);
-	}
-	cJSON *REVDIRCH4_Item = cJSON_GetObjectItem(responseKey, "REVDIRCH4");
-	if((REVDIRCH4_Item != NULL) && (cJSON_IsString(REVDIRCH4_Item)))
-	{
-		value = atoi(REVDIRCH4_Item->valuestring);
-		cJSON_AddNumberToObject(  chan4, "Reversed", value);
-	}
-	cJSON *SCALECH4_Item = cJSON_GetObjectItem(responseKey, "SCALECH4");
-	if((SCALECH4_Item != NULL) && (cJSON_IsString(SCALECH4_Item)))
-	{
-		value = atoi(SCALECH4_Item->valuestring);
-	    cJSON_AddNumberToObject(chan4, "Scale", value);
-	}
-
-    cJSON_AddItemToArray(chanArray, chan4);
-	memset(payLoadData,0,sizeof(payLoadData));
-	cJSON_PrintPreallocated(root, payLoadData, sizeof(payLoadData), false);
-	cJSON_Delete(root);
-	cJSON_Delete(responseKey);
-	if(vStartDemoTask_handle == NULL)   // return if IHUB is disconnected
-	{
-		return;
-	}
-	if(Process_Twin_Queue != NULL)
-	{
-		xQueueSend(Process_Twin_Queue, CONNECTIVITY_INFO_DATA, QUE_DELAY);
-		xQueueSend(Process_Twin_Queue, payLoadData, QUE_DELAY);
-	}
-//	updateReportedPropertiesWithConnectivityInfo(CONNECTIVITY_INFO_DATA); //Update connnectivity info here to avoid eAzureIoTErrorTopicNotSubscribed error
-//	updateReportedPropertiesWithConnectivityInfo(payLoadData);
-}
-
 //========================= Azure IOT Functions ============================================//
 bool xAzureSample_IsConnectedToInternet()
 {
@@ -1991,7 +1723,6 @@ static void process_Twin_data(const char *json_data) {
     cJSON *datetime_on_item = NULL;
     cJSON *datetime_off_item = NULL;
     cJSON *file_sync_array   = NULL;
-    cJSON* lighting = NULL;
     time_t OnEpoch = 0, OffEpoch = 0;
     cJSON *desired = cJSON_GetObjectItemCaseSensitive(TwinMessage, "desired");
 
@@ -2003,7 +1734,6 @@ static void process_Twin_data(const char *json_data) {
 		datetime_off_item = cJSON_GetObjectItem(TwinMessage, "defer_OFF_Events_until");
         file_sync_array = cJSON_GetObjectItemCaseSensitive(TwinMessage, "file_sync");
 //        actors = cJSON_GetObjectItem(TwinMessage, "actors");
-        lighting = cJSON_GetObjectItem(TwinMessage, "Channel_Setup");
     }
     else
     {
@@ -2012,7 +1742,6 @@ static void process_Twin_data(const char *json_data) {
 		// Extract "defer_OFF_Events_until"
 		datetime_off_item = cJSON_GetObjectItem(desired, "defer_OFF_Events_until");
 		file_sync_array = cJSON_GetObjectItemCaseSensitive(desired, "file_sync");
-	    lighting = cJSON_GetObjectItem(desired, "Channel_Setup");
     }
 
 	if (datetime_on_item && cJSON_IsString(datetime_on_item))
@@ -2099,170 +1828,6 @@ static void process_Twin_data(const char *json_data) {
 		}
 	}
 
-	if ((lighting  != NULL) && (cJSON_IsObject(lighting )))
-	{
-	    cJSON *locoffset_item   = cJSON_GetObjectItemCaseSensitive(lighting, "LocationOffset");
-	    cJSON *midpoffset_item  = cJSON_GetObjectItemCaseSensitive(lighting, "LocationCenter");
-
-	    if (!cJSON_IsNumber(locoffset_item) || !cJSON_IsNumber(midpoffset_item))
-	    {
-	        // Required fields missing or wrong type, nothing to do.
-	        // You can log here if you want.
-	        // printf("Lighting: LocationOffset or LocationCenter missing or not a number\n");
-	    }
-	    else
-	    {
-	        int locoffset  = locoffset_item->valueint;
-	        int midpoffset = midpoffset_item->valueint;
-
-	        // Create the main JSON object
-	        cJSON *jsonObject = cJSON_CreateObject();
-
-	        if (jsonObject != NULL)
-	        {
-	            char locoffset_str[12];  // enough for "-2147483648"
-
-	            // LOCOFFSET
-	            snprintf(locoffset_str, sizeof(locoffset_str), "%d", locoffset);
-	            cJSON_AddStringToObject(jsonObject, "LOCOFFSET", locoffset_str);
-
-	            // MIDPOFFSET
-	            snprintf(locoffset_str, sizeof(locoffset_str), "%d", midpoffset);
-	            cJSON_AddStringToObject(jsonObject, "MIDPOFFSET", locoffset_str);
-
-	            // ChannelConfig[]
-	            cJSON *chanArray = cJSON_GetObjectItemCaseSensitive(lighting, "ChannelConfig");
-	            if (cJSON_IsArray(chanArray))
-	            {
-	                int idx = 1;
-	                cJSON *chan = NULL;
-
-	                cJSON_ArrayForEach(chan, chanArray)
-	                {
-	                    // Fetch required fields for this channel
-	                    cJSON *spacing_item = cJSON_GetObjectItemCaseSensitive(chan, "LedSpacing");
-	                    cJSON *length_item  = cJSON_GetObjectItemCaseSensitive(chan, "Length");
-	                    cJSON *offset_item  = cJSON_GetObjectItemCaseSensitive(chan, "Offset");
-	                    cJSON *revdir_item  = cJSON_GetObjectItemCaseSensitive(chan, "Reversed");
-	                    cJSON *scale_item   = cJSON_GetObjectItemCaseSensitive(chan, "Scale");
-
-	                    // Validate that they exist and are numbers
-	                    if (!cJSON_IsNumber(spacing_item) ||
-	                        !cJSON_IsNumber(length_item)  ||
-	                        !cJSON_IsNumber(offset_item)  ||
-	                        !cJSON_IsBool(revdir_item)  ||
-	                        !cJSON_IsNumber(scale_item))
-	                    {
-	                        // Skip this channel if anything is missing/invalid
-	                        idx++;
-	                        continue;
-	                    }
-
-	                    int spacing = spacing_item->valueint;
-	                    int setLed  = length_item->valueint;
-	                    int offset  = offset_item->valueint;
-	                    int revdir  = cJSON_IsTrue(revdir_item);
-	                    int scale   = scale_item->valueint;
-
-	                    if (spacing <= 0) { spacing = 3; }
-	                    if (setLed  <= 0) { setLed  = 3; }
-	                    if (scale   <= 0) { scale   = 1; }
-
-	                    // SET LED SPACING (LEDSPACINGCHx)
-	                    snprintf(locoffset_str, sizeof(locoffset_str), "%d", spacing);
-	                    if (idx == 1)      { cJSON_AddStringToObject(jsonObject, "LEDSPACINGCH1", locoffset_str); }
-	                    else if (idx == 2) { cJSON_AddStringToObject(jsonObject, "LEDSPACINGCH2", locoffset_str); }
-	                    else if (idx == 3) { cJSON_AddStringToObject(jsonObject, "LEDSPACINGCH3", locoffset_str); }
-	                    else if (idx == 4) { cJSON_AddStringToObject(jsonObject, "LEDSPACINGCH4", locoffset_str); }
-
-	                    // SET_LED_S_CHx = ceil(Length / LedSpacing)
-	                    setLed = (int)ceilf((float)setLed / (float)spacing);
-	                    snprintf(locoffset_str, sizeof(locoffset_str), "%d", setLed);
-	                    if (idx == 1)      { cJSON_AddStringToObject(jsonObject, "SET_LED_S_CH1", locoffset_str); }
-	                    else if (idx == 2) { cJSON_AddStringToObject(jsonObject, "SET_LED_S_CH2", locoffset_str); }
-	                    else if (idx == 3) { cJSON_AddStringToObject(jsonObject, "SET_LED_S_CH3", locoffset_str); }
-	                    else if (idx == 4) { cJSON_AddStringToObject(jsonObject, "SET_LED_S_CH4", locoffset_str); }
-
-	                    // OFFSETCHx
-	                    snprintf(locoffset_str, sizeof(locoffset_str), "%d", offset);
-	                    if (idx == 1)      { cJSON_AddStringToObject(jsonObject, "OFFSETCH1", locoffset_str); }
-	                    else if (idx == 2) { cJSON_AddStringToObject(jsonObject, "OFFSETCH2", locoffset_str); }
-	                    else if (idx == 3) { cJSON_AddStringToObject(jsonObject, "OFFSETCH3", locoffset_str); }
-	                    else if (idx == 4) { cJSON_AddStringToObject(jsonObject, "OFFSETCH4", locoffset_str); }
-
-	                    // REVDIRCHx
-	                    snprintf(locoffset_str, sizeof(locoffset_str), "%d", revdir);
-	                    if (idx == 1)      { cJSON_AddStringToObject(jsonObject, "REVDIRCH1", locoffset_str); }
-	                    else if (idx == 2) { cJSON_AddStringToObject(jsonObject, "REVDIRCH2", locoffset_str); }
-	                    else if (idx == 3) { cJSON_AddStringToObject(jsonObject, "REVDIRCH3", locoffset_str); }
-	                    else if (idx == 4) { cJSON_AddStringToObject(jsonObject, "REVDIRCH4", locoffset_str); }
-
-	                    // SCALECHx
-	                    snprintf(locoffset_str, sizeof(locoffset_str), "%d", scale);
-	                    if (idx == 1)      { cJSON_AddStringToObject(jsonObject, "SCALECH1", locoffset_str); }
-	                    else if (idx == 2) { cJSON_AddStringToObject(jsonObject, "SCALECH2", locoffset_str); }
-	                    else if (idx == 3) { cJSON_AddStringToObject(jsonObject, "SCALECH3", locoffset_str); }
-	                    else if (idx == 4) { cJSON_AddStringToObject(jsonObject, "SCALECH4", locoffset_str); }
-
-	                    idx++;
-	                }
-	            }
-
-	            // Convert the JSON object to a string
-	            memset(g_jsonBuffer, 0, sizeof(g_jsonBuffer));
-	            cJSON_PrintPreallocated(jsonObject, g_jsonBuffer, sizeof(g_jsonBuffer), false);
-	            // Free the JSON object
-	            cJSON_Delete(jsonObject);
-	            // Send the command
-	            Send_CMD_To_Other_Actor(LIGHTING, "LIGHTING", g_jsonBuffer, strlen(g_jsonBuffer), "SET");
-	        }
-
-	        // Now build Property_Names GET request
-	        cJSON *my_JSON1 = cJSON_CreateArray();
-	        if (my_JSON1 != NULL)
-	        {
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("LOCOFFSET"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("MIDPOFFSET"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("LEDSPACINGCH1"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("SET_LED_S_CH1"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("OFFSETCH1"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("REVDIRCH1"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("SCALECH1"));
-
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("LEDSPACINGCH2"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("SET_LED_S_CH2"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("OFFSETCH2"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("REVDIRCH2"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("SCALECH2"));
-
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("LEDSPACINGCH3"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("SET_LED_S_CH3"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("OFFSETCH3"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("REVDIRCH3"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("SCALECH3"));
-
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("LEDSPACINGCH4"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("SET_LED_S_CH4"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("OFFSETCH4"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("REVDIRCH4"));
-	            cJSON_AddItemToArray(my_JSON1, cJSON_CreateString("SCALECH4"));
-
-	            cJSON *jsonObject1 = cJSON_CreateObject();
-	            if (jsonObject1 != NULL)
-	            {
-	                cJSON_AddItemToObject(jsonObject1, "Property_Names", my_JSON1);
-	                memset(g_jsonBuffer, 0, sizeof(g_jsonBuffer));
-	                cJSON_PrintPreallocated(jsonObject1, g_jsonBuffer, sizeof(g_jsonBuffer), false);
-	                cJSON_Delete(jsonObject1);
-	                Send_CMD_To_Other_Actor(LIGHTING, "LIGHTING", g_jsonBuffer, strlen(g_jsonBuffer), "GET");
-	            }
-	            else
-	            {
-	                cJSON_Delete(my_JSON1);
-	            }
-	        }
-	    } // end else (locoffset/midpoffset valid)}
-	}
 	if(TwinMessage != NULL)
 	{
 		cJSON_Delete(TwinMessage);
